@@ -21,7 +21,7 @@ those elements and require a mod update even on an otherwise compatible release.
 
 ## Features
 
-- Native-looking Share, Open, Open with, and Copy path controls.
+- Native-looking Share, Open, and Open with controls.
 - File-type icons, one clean title row, and pencil-button inline renaming.
 - Responsive image previews and animated GIF playback.
 - Inline PDF viewing with page navigation, page counts, scrolling, and sharp
@@ -32,15 +32,25 @@ those elements and require a mod update even on an otherwise compatible release.
   scripts, configuration files, and common source-code formats.
 - Explicit Edit, Save, Cancel, and Reload controls with encoding and line-ending
   preservation, external-change detection, and safe size limits.
-- Audio playback with artwork, play/pause, 10-second seeking, timeline, and
-  elapsed/total time.
+- Audio playback with artwork, play/pause, previous/next file, playback speed,
+  repeat, shuffle, timeline, volume, mute, and elapsed/total time.
+- Compact audio filename and play/pause controls remain available when the full
+  media preview is hidden.
 - Video playback with responsive sizing and compact auto-hiding controls.
 - Automatic playback cleanup when selection changes or Explorer closes.
 - Archive extraction through Windows, WinRAR, 7-Zip, or WinZip-compatible tools.
+- Inline ZIP, RAR, and 7Z archive contents preview before extraction.
 - Extract here, Extract to..., and Extract to "archive-name\\" choices.
 - Cross-tab extraction and moving to any open filesystem folder or selected
   destination subfolder.
 - Multi-selection Move to..., recycle-aware Delete, and Archive actions.
+- A replacement Details section with individually copyable name, full
+  path, size, modified date, and SHA-256 values.
+- EXIF details for supported images, including dimensions, camera information,
+  date taken, rating, and GPS coordinates when available.
+- Rich multi-selection summaries with item/file/folder counts, combined file
+  size, file-type totals, and modified-date ranges.
+- A compact preview show/hide control and one-click copying of all core details.
 
 Playback depends on codecs available to Windows. Print appears only when the
 selected file type has a print handler registered in Windows. Archive choices

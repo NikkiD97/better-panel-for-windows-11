@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.13.0
+
+- Added a collapsible Details section with click-to-copy fields and Copy All.
+- Added SHA-256 hashes and image EXIF details.
+- Added folder size, file count, subfolder count, and file-type totals.
+- Added multiple-selection counts, combined size, types, and modified dates.
+- Added preview show/hide and compact audio playback.
+- Added audio volume, mute, speed, repeat, shuffle, previous, and next controls.
+- Added Fluent media icons.
+- Added ZIP, RAR, and 7Z contents preview.
+- Removed Explorer's duplicate Details section.
+- Removed Copy path.
+- Removed 10-second back and forward controls.
+
 ## 1.12.0
 
 - Added an inline PDF viewer powered by Windows' PDF rendering API.
