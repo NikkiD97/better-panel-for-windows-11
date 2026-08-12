@@ -1,0 +1,60 @@
+name: Bug report
+description: Report a reproducible Better Panel problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Better Panel. Please disable other File Explorer XAML diagnostics mods before reproducing the problem.
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and OS build
+      description: Run `winver` and enter the version and build shown.
+      placeholder: Windows 11 25H2, build 26200.x
+    validations:
+      required: true
+  - type: input
+    id: windhawk
+    attributes:
+      label: Windhawk version
+    validations:
+      required: true
+  - type: input
+    id: file-type
+    attributes:
+      label: File type or selection
+      placeholder: MP3, MOV, ZIP, folder, or multiple files
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: Tell us exactly what you selected and what you clicked.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: other-mods
+    attributes:
+      label: Other enabled Explorer mods
+      description: List other Windhawk mods that target File Explorer or XAML.
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or logs
+      description: Drag screenshots here and remove personal file paths if necessary.

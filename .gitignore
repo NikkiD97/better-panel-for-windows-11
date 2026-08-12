@@ -1,0 +1,12 @@
+# Windhawk local build output
+*.dll
+*.pdb
+*.ilk
+*.obj
+
+# Editors and operating-system files
+.vs/
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
