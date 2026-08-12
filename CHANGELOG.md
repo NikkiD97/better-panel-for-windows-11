@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.13.1
+
+- Fixed video resizing during playback.
+
 ## 1.13.0
 
 - Added a collapsible Details section with click-to-copy fields and Copy All.

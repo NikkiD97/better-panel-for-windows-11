@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         1.13.0
+// @version         1.13.1
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -102,6 +102,10 @@ Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 1.13.1
+
+* Fixed video resizing during playback.
 
 ### 1.13.0
 
@@ -2358,6 +2362,7 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> gifCard;
     winrt::weak_ref<muxc::Image> gifImage;
     winrt::weak_ref<muxc::MediaPlayerElement> videoPlayer;
+    winrt::weak_ref<muxc::Viewbox> videoViewport;
     winrt::weak_ref<muxc::Grid> nativePreview;
     winrt::weak_ref<muxc::Image> nativePreviewImage;
     winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage animatedGif{nullptr};
@@ -2435,6 +2440,7 @@ struct BetterPanelState {
         std::numeric_limits<double>::quiet_NaN();
     double previewOriginalMinHeight = 0;
     std::wstring selectedPath;
+    ULONGLONG lastNonEmptySelectionTick = 0;
     bool updatingTimeline = false;
     bool updatingVolume = false;
     bool unloaded = false;
@@ -5525,11 +5531,29 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     BetterPanelEnsureShareActions(state);
     BetterPanelHideNativeDetails(state);
     auto activeSelection = BetterPanelGetActiveSelectionPaths();
+    ULONGLONG selectionTick = GetTickCount64();
+    if (!activeSelection.empty()) {
+        state->lastNonEmptySelectionTick = selectionTick;
+    }
+    DWORD previousPathAttributes =
+        state->selectedPath.empty()
+            ? INVALID_FILE_ATTRIBUTES
+            : GetFileAttributesW(state->selectedPath.c_str());
+    bool previousPathIsFile =
+        previousPathAttributes != INVALID_FILE_ATTRIBUTES &&
+        !(previousPathAttributes & FILE_ATTRIBUTE_DIRECTORY);
+    bool preserveSelectionDuringResize =
+        activeSelection.empty() && previousPathIsFile &&
+        (((GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0) ||
+         (state->lastNonEmptySelectionTick != 0 &&
+          selectionTick - state->lastNonEmptySelectionTick < 1500));
     bool isMultiSelection = activeSelection.size() > 1;
     auto path = activeSelection.size() == 1
                     ? activeSelection.front()
                     : (activeSelection.empty()
-                           ? BetterPanelGetActiveFolderPath()
+                           ? (preserveSelectionDuringResize
+                                  ? state->selectedPath
+                                  : BetterPanelGetActiveFolderPath())
                            : state->selectedPath);
     if (path.empty()) path = state->selectedPath;
     DWORD pathAttributes = path.empty() ? INVALID_FILE_ATTRIBUTES
@@ -6364,13 +6388,25 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     videoPlayer.AutoPlay(false);
     videoPlayer.Stretch(
         winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
-    videoPlayer.Width(420);
-    videoPlayer.Height(202);
+    // Keep the decoder's rendering surface stable. The Viewbox below scales
+    // this surface through XAML composition without forcing the active decoder
+    // to recreate it for every pixel of a Details-pane resize.
+    videoPlayer.Width(720);
+    videoPlayer.Height(346);
     videoPlayer.HorizontalAlignment(HorizontalAlignment::Center);
     auto videoControls = videoPlayer.TransportControls();
     videoControls.IsCompact(true);
     videoControls.ShowAndHideAutomatically(true);
     state->videoPlayer = winrt::make_weak(videoPlayer);
+
+    muxc::Viewbox videoViewport;
+    videoViewport.Width(420);
+    videoViewport.Height(202);
+    videoViewport.HorizontalAlignment(HorizontalAlignment::Center);
+    videoViewport.Stretch(
+        winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
+    videoViewport.Child(videoPlayer);
+    state->videoViewport = winrt::make_weak(videoViewport);
 
     DispatcherTimer videoControlsTimer;
     videoControlsTimer.Interval(
@@ -6388,6 +6424,7 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
         }
     });
     state->videoControlsTimer = videoControlsTimer;
+
     videoPlayer.PointerMoved(
         [weakState](winrt::Windows::Foundation::IInspectable const&,
                     winrt::Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&) {
@@ -6413,15 +6450,13 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
         [weakState](winrt::Windows::Foundation::IInspectable const&,
                     SizeChangedEventArgs const& args) {
             if (auto state = weakState.lock()) {
-                if (auto player = state->videoPlayer.get()) {
-                    // Follow the Details pane width, while keeping wide panes
-                    // from turning the video surface into a giant black strip.
+                if (auto viewport = state->videoViewport.get()) {
                     double availableWidth =
                         std::max(120.0, static_cast<double>(args.NewSize().Width));
-                    double playerWidth = std::min(availableWidth, 720.0);
-                    player.Width(playerWidth);
-                    player.Height(
-                        std::clamp(playerWidth * 0.48, 190.0, 285.0));
+                    double viewportWidth = std::min(availableWidth, 960.0);
+                    viewport.Width(viewportWidth);
+                    viewport.Height(
+                        std::clamp(viewportWidth * 0.48, 190.0, 460.0));
                 }
                 state->gifNormalHeight =
                     std::clamp(static_cast<double>(args.NewSize().Width) * 0.62,
@@ -6439,7 +6474,7 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
                 }
             }
         });
-    videoCard.Child(videoPlayer);
+    videoCard.Child(videoViewport);
     panel.Children().Append(videoCard);
 
     muxc::Border audioCard;
