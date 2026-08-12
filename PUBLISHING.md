@@ -10,7 +10,7 @@
    local installer scripts, registry exports, logs, or personal filesystem paths.
 5. Add repository topics such as `windhawk`, `windows-11`, `file-explorer`, and
    `winui`.
-6. Create a release tagged `v1.10.1` after testing the uploaded source.
+6. Create a release tagged `v1.11.0` after testing the uploaded source.
 
 ## Windhawk catalog submission
 

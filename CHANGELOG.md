@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.11.0
+
+- Added inline preview and editing for common text, configuration, markup,
+  script, and source-code files.
+- Added Edit, Save, Cancel, and Reload controls.
+- Preserved UTF-8, UTF-8 BOM, UTF-16 LE/BE, and compatible ANSI encodings.
+- Preserved each file's CRLF, LF, or CR line-ending convention.
+- Added external-change detection to prevent overwriting newer file contents.
+- Paused Better Panel selection refresh during editing so the editor remains
+  bound to its original file until Save or Cancel.
+- Added binary-content detection, read-only handling, a 2 MB preview limit, and
+  a 1 MB editing limit to protect Explorer responsiveness.
+
 ## 1.10.1
 
 - Reworked action and media controls to use native WinUI button proportions.

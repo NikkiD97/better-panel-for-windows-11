@@ -24,6 +24,10 @@ those elements and require a mod update even on an otherwise compatible release.
 - Native-looking Share, Open, Open with, and Copy path controls.
 - File-type icons, one clean title row, and pencil-button inline renaming.
 - Responsive image previews and animated GIF playback.
+- Inline preview and editing for TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV,
+  scripts, configuration files, and common source-code formats.
+- Explicit Edit, Save, Cancel, and Reload controls with encoding and line-ending
+  preservation, external-change detection, and safe size limits.
 - Audio playback with artwork, play/pause, 10-second seeking, timeline, and
   elapsed/total time.
 - Video playback with responsive sizing and compact auto-hiding controls.

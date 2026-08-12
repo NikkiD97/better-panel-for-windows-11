@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         1.10.1
+// @version         1.11.0
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -60,6 +60,9 @@ mod changes even on an otherwise compatible Windows release.
 * Responsive image previews with inline expand and restore controls.
 * Animated GIF previews that use the original file instead of a static Explorer
   thumbnail.
+* Inline preview and editing for TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV,
+  scripts, configuration files, and common source-code formats, with explicit
+  Save, Cancel, and Reload controls.
 * An audio player with artwork, play/pause, 10-second skip controls, a timeline,
   and elapsed/total time for MP3, OGG, Opus, FLAC, WAV, AAC/M4A, WMA, and other
   Windows-supported audio formats.
@@ -79,11 +82,23 @@ mod changes even on an otherwise compatible Windows release.
   and **Archive** using an installed WinRAR, 7-Zip, WinZip, or Windows tool.
 * Destination transfer controls appear only in the destination folder tab, not
   on normal audio, video, image, archive, or other source-file panels.
+* Text safety protections include encoding preservation, external-change
+  detection, read-only handling, binary-content detection, and conservative
+  preview/editing size limits.
 
 Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 1.11.0
+
+* Added inline preview and editing for common text, configuration, markup,
+  script, and source-code files.
+* Added explicit Edit, Save, Cancel, and Reload controls with encoding
+  and line-ending preservation plus external-change detection.
+* Added safe 2 MB preview and 1 MB editing limits, binary-content detection,
+  read-only handling, and paused selection refresh while editing.
 
 
 ### 1.10.1
@@ -1793,6 +1808,7 @@ HRESULT InjectWindhawkTAP() noexcept
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -2284,6 +2300,14 @@ namespace ws = winrt::Windows::Storage;
 
 #define CWM_GETISHELLBROWSER (WM_USER + 7)
 
+enum class BetterPanelTextEncoding {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+    Utf16Be,
+    Ansi,
+};
+
 struct BetterPanelState {
     mud::DispatcherQueue dispatcher{nullptr};
     DispatcherTimer timer{nullptr};
@@ -2324,6 +2348,13 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::TextBlock> transferDestinationText;
     winrt::weak_ref<FrameworkElement> multiActionRow;
     winrt::weak_ref<muxc::TextBlock> multiSelectionText;
+    winrt::weak_ref<FrameworkElement> textCard;
+    winrt::weak_ref<muxc::TextBox> textEditor;
+    winrt::weak_ref<muxc::Button> textEditButton;
+    winrt::weak_ref<muxc::Button> textSaveButton;
+    winrt::weak_ref<muxc::Button> textCancelButton;
+    winrt::weak_ref<muxc::Button> textReloadButton;
+    winrt::weak_ref<muxc::TextBlock> textInfo;
     uint32_t nativeShareIndex = 0;
     Thickness nativeShareMargin{};
     bool previewExpanded = false;
@@ -2337,6 +2368,17 @@ struct BetterPanelState {
     double gifNormalHeight = 260;
     std::vector<std::wstring> transferSources;
     std::wstring transferDestination;
+    std::wstring textLoadedPath;
+    std::wstring textOriginal;
+    std::wstring textNewline = L"\r\n";
+    BetterPanelTextEncoding textEncoding = BetterPanelTextEncoding::Utf8;
+    FILETIME textLastWriteTime{};
+    uint64_t textFileSize = 0;
+    bool textLoading = false;
+    bool textEditable = false;
+    bool textEditing = false;
+    bool textDirty = false;
+    bool suppressTextChanged = false;
 };
 
 std::mutex g_betterPanelMutex;
@@ -2696,6 +2738,345 @@ bool BetterPanelIsArchiveFile(std::wstring_view path) {
     return std::find(std::begin(archiveExtensions),
                      std::end(archiveExtensions), extension) !=
            std::end(archiveExtensions);
+}
+
+bool BetterPanelIsTextFile(std::wstring_view path) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) {
+        return false;
+    }
+    std::wstring extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    static constexpr std::wstring_view textExtensions[] = {
+        L".txt",        L".md",       L".markdown", L".log",
+        L".csv",        L".tsv",      L".json",     L".jsonc",
+        L".xml",        L".xaml",     L".yaml",     L".yml",
+        L".ini",        L".cfg",      L".conf",     L".config",
+        L".properties", L".reg",      L".url",      L".bat",
+        L".cmd",        L".ps1",      L".psm1",     L".psd1",
+        L".sh",         L".py",       L".js",       L".jsx",
+        L".ts",         L".tsx",      L".css",      L".scss",
+        L".less",       L".html",     L".htm",      L".c",
+        L".h",          L".cpp",      L".hpp",      L".cc",
+        L".cs",         L".java",     L".kt",       L".kts",
+        L".rs",         L".go",       L".php",      L".rb",
+        L".swift",      L".sql",      L".toml",     L".gradle",
+        L".sln",        L".vcxproj",  L".csproj",   L".props",
+        L".targets",    L".gitignore", L".gitattributes"};
+    return std::find(std::begin(textExtensions), std::end(textExtensions),
+                     extension) != std::end(textExtensions);
+}
+
+struct BetterPanelTextFileData {
+    bool success = false;
+    bool editable = false;
+    std::wstring text;
+    std::wstring newline = L"\r\n";
+    std::wstring message;
+    BetterPanelTextEncoding encoding = BetterPanelTextEncoding::Utf8;
+    FILETIME lastWriteTime{};
+    uint64_t size = 0;
+};
+
+constexpr uint64_t kBetterPanelTextPreviewLimit = 2 * 1024 * 1024;
+constexpr uint64_t kBetterPanelTextEditLimit = 1024 * 1024;
+
+std::wstring BetterPanelTextEncodingName(BetterPanelTextEncoding encoding) {
+    switch (encoding) {
+        case BetterPanelTextEncoding::Utf8:
+            return L"UTF-8";
+        case BetterPanelTextEncoding::Utf8Bom:
+            return L"UTF-8 BOM";
+        case BetterPanelTextEncoding::Utf16Le:
+            return L"UTF-16 LE";
+        case BetterPanelTextEncoding::Utf16Be:
+            return L"UTF-16 BE";
+        case BetterPanelTextEncoding::Ansi:
+            return L"ANSI";
+    }
+    return L"Text";
+}
+
+std::wstring BetterPanelFormatByteSize(uint64_t size) {
+    WCHAR buffer[48]{};
+    if (size >= 1024 * 1024) {
+        swprintf_s(buffer, L"%.1f MB",
+                   static_cast<double>(size) / (1024.0 * 1024.0));
+    } else if (size >= 1024) {
+        swprintf_s(buffer, L"%.1f KB", static_cast<double>(size) / 1024.0);
+    } else {
+        swprintf_s(buffer, L"%llu bytes",
+                   static_cast<unsigned long long>(size));
+    }
+    return buffer;
+}
+
+bool BetterPanelDecodeMultiByte(UINT codePage, DWORD flags,
+                                const char* bytes, int length,
+                                std::wstring& text) {
+    if (!length) {
+        text.clear();
+        return true;
+    }
+    int required = MultiByteToWideChar(codePage, flags, bytes, length, nullptr,
+                                       0);
+    if (required <= 0) {
+        return false;
+    }
+    text.resize(required);
+    return MultiByteToWideChar(codePage, flags, bytes, length, text.data(),
+                               required) == required;
+}
+
+BetterPanelTextFileData BetterPanelReadTextFile(std::wstring const& path) {
+    BetterPanelTextFileData result;
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                  FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        result.message = L"Preview unavailable (error " +
+                         std::to_wstring(GetLastError()) + L")";
+        return result;
+    }
+
+    LARGE_INTEGER size{};
+    if (!GetFileSizeEx(file, &size) || size.QuadPart < 0) {
+        result.message = L"Could not read the file size";
+        CloseHandle(file);
+        return result;
+    }
+    result.size = static_cast<uint64_t>(size.QuadPart);
+    GetFileTime(file, nullptr, nullptr, &result.lastWriteTime);
+    if (result.size > kBetterPanelTextPreviewLimit) {
+        result.message = L"Preview limited to text files up to 2 MB";
+        CloseHandle(file);
+        return result;
+    }
+
+    std::vector<uint8_t> bytes(static_cast<size_t>(result.size));
+    DWORD total = 0;
+    while (total < bytes.size()) {
+        DWORD chunk = 0;
+        DWORD requested = static_cast<DWORD>(
+            std::min<size_t>(bytes.size() - total, 1024 * 1024));
+        if (!ReadFile(file, bytes.data() + total, requested, &chunk, nullptr)) {
+            result.message = L"Could not read the file";
+            CloseHandle(file);
+            return result;
+        }
+        if (!chunk) break;
+        total += chunk;
+    }
+    CloseHandle(file);
+    bytes.resize(total);
+    result.size = total;
+
+    size_t offset = 0;
+    if (bytes.size() >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB &&
+        bytes[2] == 0xBF) {
+        result.encoding = BetterPanelTextEncoding::Utf8Bom;
+        offset = 3;
+    } else if (bytes.size() >= 2 && bytes[0] == 0xFF &&
+               bytes[1] == 0xFE) {
+        result.encoding = BetterPanelTextEncoding::Utf16Le;
+        offset = 2;
+    } else if (bytes.size() >= 2 && bytes[0] == 0xFE &&
+               bytes[1] == 0xFF) {
+        result.encoding = BetterPanelTextEncoding::Utf16Be;
+        offset = 2;
+    }
+
+    if (result.encoding == BetterPanelTextEncoding::Utf16Le ||
+        result.encoding == BetterPanelTextEncoding::Utf16Be) {
+        size_t remaining = bytes.size() - offset;
+        if (remaining % 2) {
+            result.message = L"Invalid UTF-16 text file";
+            return result;
+        }
+        result.text.resize(remaining / 2);
+        for (size_t index = 0; index < result.text.size(); index++) {
+            uint8_t first = bytes[offset + index * 2];
+            uint8_t second = bytes[offset + index * 2 + 1];
+            result.text[index] = static_cast<wchar_t>(
+                result.encoding == BetterPanelTextEncoding::Utf16Le
+                    ? first | (second << 8)
+                    : (first << 8) | second);
+        }
+    } else {
+        auto begin = reinterpret_cast<const char*>(bytes.data() + offset);
+        int length = static_cast<int>(bytes.size() - offset);
+        size_t nulCount = std::count(bytes.begin() + offset, bytes.end(), 0);
+        if (nulCount > std::max<size_t>(2, (bytes.size() - offset) / 100)) {
+            result.message = L"This file appears to contain binary data";
+            return result;
+        }
+        if (!BetterPanelDecodeMultiByte(CP_UTF8, MB_ERR_INVALID_CHARS, begin,
+                                        length, result.text)) {
+            result.encoding = BetterPanelTextEncoding::Ansi;
+            if (!BetterPanelDecodeMultiByte(CP_ACP, 0, begin, length,
+                                            result.text)) {
+                result.message = L"Unsupported text encoding";
+                return result;
+            }
+        }
+    }
+
+    result.success = true;
+    if (result.text.find(L"\r\n") != std::wstring::npos) {
+        result.newline = L"\r\n";
+    } else if (result.text.find(L'\n') != std::wstring::npos) {
+        result.newline = L"\n";
+    } else if (result.text.find(L'\r') != std::wstring::npos) {
+        result.newline = L"\r";
+    }
+    result.editable = result.size <= kBetterPanelTextEditLimit;
+    DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_READONLY)) {
+        result.editable = false;
+        result.message = L"Read-only file";
+    } else if (!result.editable) {
+        result.message = L"Read-only preview: editing is limited to 1 MB";
+    }
+    return result;
+}
+
+bool BetterPanelGetFileStamp(std::wstring const& path, uint64_t& size,
+                             FILETIME& lastWriteTime) {
+    HANDLE file = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                  FILE_SHARE_DELETE,
+                              nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    LARGE_INTEGER fileSize{};
+    bool success = GetFileSizeEx(file, &fileSize) &&
+                   GetFileTime(file, nullptr, nullptr, &lastWriteTime);
+    CloseHandle(file);
+    if (success) size = static_cast<uint64_t>(fileSize.QuadPart);
+    return success;
+}
+
+std::wstring BetterPanelNormalizeLineEndings(
+    std::wstring_view text, std::wstring_view newline) {
+    std::wstring normalized;
+    normalized.reserve(text.size() + 16);
+    for (size_t index = 0; index < text.size(); index++) {
+        if (text[index] == L'\r') {
+            if (index + 1 < text.size() && text[index + 1] == L'\n') {
+                index++;
+            }
+            normalized.append(newline);
+        } else if (text[index] == L'\n') {
+            normalized.append(newline);
+        } else {
+            normalized.push_back(text[index]);
+        }
+    }
+    return normalized;
+}
+
+bool BetterPanelEncodeText(std::wstring const& text,
+                           BetterPanelTextEncoding& encoding,
+                           std::vector<uint8_t>& bytes) {
+    bytes.clear();
+    if (encoding == BetterPanelTextEncoding::Utf16Le ||
+        encoding == BetterPanelTextEncoding::Utf16Be) {
+        bytes.reserve(2 + text.size() * 2);
+        bytes.push_back(encoding == BetterPanelTextEncoding::Utf16Le ? 0xFF
+                                                                     : 0xFE);
+        bytes.push_back(encoding == BetterPanelTextEncoding::Utf16Le ? 0xFE
+                                                                     : 0xFF);
+        for (wchar_t character : text) {
+            uint8_t low = static_cast<uint8_t>(character & 0xFF);
+            uint8_t high = static_cast<uint8_t>((character >> 8) & 0xFF);
+            if (encoding == BetterPanelTextEncoding::Utf16Le) {
+                bytes.push_back(low);
+                bytes.push_back(high);
+            } else {
+                bytes.push_back(high);
+                bytes.push_back(low);
+            }
+        }
+        return true;
+    }
+
+    UINT codePage = encoding == BetterPanelTextEncoding::Ansi ? CP_ACP
+                                                               : CP_UTF8;
+    BOOL usedDefault = FALSE;
+    int required = WideCharToMultiByte(
+        codePage, encoding == BetterPanelTextEncoding::Ansi
+                      ? WC_NO_BEST_FIT_CHARS
+                      : WC_ERR_INVALID_CHARS,
+        text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr,
+        encoding == BetterPanelTextEncoding::Ansi ? &usedDefault : nullptr);
+    if (required <= 0 || usedDefault) {
+        if (encoding != BetterPanelTextEncoding::Ansi) return false;
+        encoding = BetterPanelTextEncoding::Utf8Bom;
+        return BetterPanelEncodeText(text, encoding, bytes);
+    }
+    size_t prefix = encoding == BetterPanelTextEncoding::Utf8Bom ? 3 : 0;
+    bytes.resize(prefix + required);
+    if (prefix) {
+        bytes[0] = 0xEF;
+        bytes[1] = 0xBB;
+        bytes[2] = 0xBF;
+    }
+    usedDefault = FALSE;
+    return WideCharToMultiByte(
+               codePage, encoding == BetterPanelTextEncoding::Ansi
+                             ? WC_NO_BEST_FIT_CHARS
+                             : WC_ERR_INVALID_CHARS,
+               text.data(), static_cast<int>(text.size()),
+               reinterpret_cast<char*>(bytes.data() + prefix), required,
+               nullptr,
+               encoding == BetterPanelTextEncoding::Ansi ? &usedDefault
+                                                          : nullptr) ==
+               required &&
+           !usedDefault;
+}
+
+bool BetterPanelWriteTextFile(std::wstring const& path,
+                              std::wstring const& text,
+                              BetterPanelTextEncoding& encoding,
+                              DWORD& error) {
+    std::vector<uint8_t> bytes;
+    if (!BetterPanelEncodeText(text, encoding, bytes)) {
+        error = ERROR_NO_UNICODE_TRANSLATION;
+        return false;
+    }
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+                              nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                              nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        error = GetLastError();
+        return false;
+    }
+    DWORD total = 0;
+    bool success = true;
+    while (total < bytes.size()) {
+        DWORD written = 0;
+        DWORD requested = static_cast<DWORD>(
+            std::min<size_t>(bytes.size() - total, 1024 * 1024));
+        if (!WriteFile(file, bytes.data() + total, requested, &written,
+                       nullptr) ||
+            !written) {
+            success = false;
+            error = GetLastError();
+            break;
+        }
+        total += written;
+    }
+    if (success && !FlushFileBuffers(file)) {
+        success = false;
+        error = GetLastError();
+    }
+    CloseHandle(file);
+    return success;
 }
 
 bool BetterPanelAppendExtractMenuItems(HMENU source, HMENU destination,
@@ -3234,6 +3615,189 @@ void BetterPanelSetStatus(winrt::weak_ref<muxc::TextBlock> weakStatus,
         status.Visibility(text.empty() ? Visibility::Collapsed
                                        : Visibility::Visible);
     }
+}
+
+void BetterPanelUpdateTextControls(
+    std::shared_ptr<BetterPanelState> const& state) {
+    auto editor = state->textEditor.get();
+    if (editor) editor.IsReadOnly(!state->textEditing);
+    if (auto button = state->textEditButton.get()) {
+        button.Visibility(state->textEditable && !state->textEditing
+                              ? Visibility::Visible
+                              : Visibility::Collapsed);
+    }
+    if (auto button = state->textSaveButton.get()) {
+        button.Visibility(state->textEditing ? Visibility::Visible
+                                             : Visibility::Collapsed);
+        button.IsEnabled(state->textDirty);
+    }
+    if (auto button = state->textCancelButton.get()) {
+        button.Visibility(state->textEditing ? Visibility::Visible
+                                             : Visibility::Collapsed);
+    }
+    if (auto button = state->textReloadButton.get()) {
+        button.Visibility(!state->textEditing && !state->textLoading
+                              ? Visibility::Visible
+                              : Visibility::Collapsed);
+    }
+    if (auto info = state->textInfo.get()) {
+        if (state->textLoading) {
+            info.Text(L"Loading preview…");
+        } else if (!state->textLoadedPath.empty()) {
+            std::wstring label = BetterPanelTextEncodingName(
+                                     state->textEncoding) +
+                                 L" • " +
+                                 BetterPanelFormatByteSize(state->textFileSize);
+            if (state->textEditing) {
+                label += state->textDirty ? L" • Unsaved changes"
+                                          : L" • Editing";
+            } else if (!state->textEditable) {
+                label += L" • Read-only preview";
+            }
+            info.Text(label);
+        } else {
+            info.Text(L"");
+        }
+    }
+}
+
+void BetterPanelLoadTextPreview(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::wstring const& path) {
+    if (path.empty() || state->textEditing) return;
+    auto editor = state->textEditor.get();
+    if (!editor) return;
+
+    state->textLoading = true;
+    state->textLoadedPath.clear();
+    state->textEditable = false;
+    state->textDirty = false;
+    state->suppressTextChanged = true;
+    editor.IsReadOnly(true);
+    editor.Text(L"Loading preview…");
+    state->suppressTextChanged = false;
+    BetterPanelUpdateTextControls(state);
+
+    auto weakState = std::weak_ptr<BetterPanelState>(state);
+    auto dispatcher = state->dispatcher;
+    std::thread([weakState, dispatcher, path]() {
+        auto data = BetterPanelReadTextFile(path);
+        dispatcher.TryEnqueue(
+            [weakState, path, data = std::move(data)]() mutable {
+                auto state = weakState.lock();
+                if (!state || state->unloaded || state->selectedPath != path ||
+                    state->textEditing) {
+                    return;
+                }
+                auto editor = state->textEditor.get();
+                if (!editor) return;
+                state->textLoading = false;
+                state->textLoadedPath = path;
+                state->textEncoding = data.encoding;
+                state->textNewline = data.newline;
+                state->textLastWriteTime = data.lastWriteTime;
+                state->textFileSize = data.size;
+                state->textEditable = data.success && data.editable;
+                state->textDirty = false;
+                state->suppressTextChanged = true;
+                editor.Text(data.success ? data.text : data.message);
+                state->suppressTextChanged = false;
+                state->textOriginal = data.success
+                                          ? std::wstring(editor.Text().c_str())
+                                          : L"";
+                BetterPanelUpdateTextControls(state);
+                if (!data.message.empty()) {
+                    if (auto info = state->textInfo.get()) {
+                        std::wstring existing = info.Text().c_str();
+                        info.Text(existing.empty() ? data.message
+                                                   : existing + L" • " +
+                                                         data.message);
+                    }
+                }
+            });
+    }).detach();
+}
+
+void BetterPanelBeginTextEdit(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (state->textEditing || !state->textEditable ||
+        state->textLoadedPath != state->selectedPath) {
+        return;
+    }
+    state->textEditing = true;
+    state->textDirty = false;
+    if (state->timer) state->timer.Stop();
+    BetterPanelUpdateTextControls(state);
+    if (auto editor = state->textEditor.get()) {
+        editor.Focus(FocusState::Programmatic);
+    }
+    BetterPanelSetStatus(
+        state->status,
+        L"Editing " + BetterPanelFileName(state->textLoadedPath) +
+            L". Save or Cancel before changing files.");
+}
+
+void BetterPanelCancelTextEdit(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state->textEditing) return;
+    if (auto editor = state->textEditor.get()) {
+        state->suppressTextChanged = true;
+        editor.Text(state->textOriginal);
+        state->suppressTextChanged = false;
+    }
+    state->textEditing = false;
+    state->textDirty = false;
+    BetterPanelUpdateTextControls(state);
+    BetterPanelSetStatus(state->status, L"Changes discarded");
+    if (state->timer) state->timer.Start();
+}
+
+void BetterPanelSaveTextEdit(
+    std::shared_ptr<BetterPanelState> const& state) {
+    auto editor = state->textEditor.get();
+    if (!state->textEditing || !state->textDirty || !editor ||
+        state->textLoadedPath.empty()) {
+        return;
+    }
+
+    uint64_t currentSize = 0;
+    FILETIME currentWriteTime{};
+    if (!BetterPanelGetFileStamp(state->textLoadedPath, currentSize,
+                                 currentWriteTime) ||
+        currentSize != state->textFileSize ||
+        CompareFileTime(&currentWriteTime, &state->textLastWriteTime) != 0) {
+        BetterPanelSetStatus(
+            state->status,
+            L"The file changed outside Better Panel. Cancel and reload it before saving.");
+        return;
+    }
+
+    std::wstring editorText = editor.Text().c_str();
+    std::wstring text = BetterPanelNormalizeLineEndings(
+        editorText, state->textNewline);
+    auto encoding = state->textEncoding;
+    DWORD error = ERROR_SUCCESS;
+    if (!BetterPanelWriteTextFile(state->textLoadedPath, text, encoding,
+                                  error)) {
+        BetterPanelSetStatus(state->status,
+                             L"Save failed (error " +
+                                 std::to_wstring(error) + L")");
+        return;
+    }
+
+    state->textEncoding = encoding;
+    state->textOriginal = editorText;
+    BetterPanelGetFileStamp(state->textLoadedPath, state->textFileSize,
+                            state->textLastWriteTime);
+    state->textEditing = false;
+    state->textDirty = false;
+    BetterPanelUpdateTextControls(state);
+    BetterPanelSetStatus(
+        state->status,
+        L"Saved " + BetterPanelFileName(state->textLoadedPath));
+    SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW,
+                   state->textLoadedPath.c_str(), nullptr);
+    if (state->timer) state->timer.Start();
 }
 
 winrt::fire_and_forget BetterPanelLoadArtwork(
@@ -3890,6 +4454,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     bool isVideo = BetterPanelIsVideoFile(path);
     bool isGif = BetterPanelIsGifFile(path);
     bool isArchive = BetterPanelIsArchiveFile(path);
+    bool isText = BetterPanelIsTextFile(path);
     auto activeSelection = BetterPanelGetActiveSelectionPaths();
     bool isMultiSelection = activeSelection.size() > 1;
     if (isMultiSelection) {
@@ -3898,6 +4463,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         isVideo = BetterPanelIsVideoFile(path);
         isGif = BetterPanelIsGifFile(path);
         isArchive = BetterPanelIsArchiveFile(path);
+        isText = BetterPanelIsTextFile(path);
     }
 
     if (auto multiActionRow = state->multiActionRow.get()) {
@@ -4005,13 +4571,19 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
                                ? Visibility::Visible
                                : Visibility::Collapsed);
     }
+    if (auto textCard = state->textCard.get()) {
+        textCard.Visibility(isText && !isMultiSelection
+                                ? Visibility::Visible
+                                : Visibility::Collapsed);
+    }
     if (auto fileTitleRow = state->fileTitleRow.get()) {
         fileTitleRow.Visibility(isMultiSelection ? Visibility::Collapsed
                                                  : Visibility::Visible);
     }
     if (auto nativePreview = state->nativePreview.get()) {
         nativePreview.Visibility(!isMultiSelection &&
-                                         (isAudio || isVideo || isGif)
+                                         (isAudio || isVideo || isGif ||
+                                          isText)
                                      ? Visibility::Collapsed
                                      : Visibility::Visible);
     }
@@ -4022,6 +4594,11 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             BetterPanelStopStateMedia(state, previousPath);
         }
         state->selectedPath = path;
+        state->textLoading = false;
+        state->textLoadedPath.clear();
+        state->textOriginal.clear();
+        state->textEditable = false;
+        state->textDirty = false;
         state->animatedGif = nullptr;
         state->gifExpanded = false;
         if (auto gifCard = state->gifCard.get()) {
@@ -4059,6 +4636,9 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
         if (isGif) {
             BetterPanelLoadAnimatedGif(state, path);
+        }
+        if (isText) {
+            BetterPanelLoadTextPreview(state, path);
         }
     } else if (isGif && state->animatedGif) {
         if (auto gifImage = state->gifImage.get();
@@ -4704,6 +5284,122 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
 
     audioCard.Child(audioContent);
     panel.Children().Append(audioCard);
+
+    muxc::Border textCard;
+    textCard.Name(L"BetterDetailPanelTextCard");
+    textCard.Margin(Thickness{0, 4, 0, 0});
+    textCard.Padding(Thickness{12, 10, 12, 12});
+    textCard.CornerRadius(CornerRadius{8});
+    textCard.Visibility(Visibility::Collapsed);
+    textCard.HorizontalAlignment(HorizontalAlignment::Stretch);
+    state->textCard = winrt::make_weak(textCard.as<FrameworkElement>());
+
+    muxc::StackPanel textContent;
+    textContent.Spacing(8);
+
+    muxc::TextBlock textHeading;
+    textHeading.Text(L"Text preview");
+    textHeading.FontWeight(
+        winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+    textContent.Children().Append(textHeading);
+
+    muxc::TextBlock textInfo;
+    textInfo.FontSize(11);
+    textInfo.Opacity(0.70);
+    textInfo.TextWrapping(TextWrapping::Wrap);
+    state->textInfo = winrt::make_weak(textInfo);
+    textContent.Children().Append(textInfo);
+
+    muxc::TextBox textEditor;
+    textEditor.AcceptsReturn(true);
+    textEditor.IsReadOnly(true);
+    textEditor.IsSpellCheckEnabled(false);
+    textEditor.IsTextPredictionEnabled(false);
+    textEditor.TextWrapping(TextWrapping::NoWrap);
+    textEditor.MinHeight(220);
+    textEditor.MaxHeight(430);
+    textEditor.HorizontalAlignment(HorizontalAlignment::Stretch);
+    textEditor.FontFamily(
+        winrt::Microsoft::UI::Xaml::Media::FontFamily(L"Consolas"));
+    textEditor.FontSize(12);
+    muxc::ScrollViewer::SetHorizontalScrollBarVisibility(
+        textEditor, muxc::ScrollBarVisibility::Auto);
+    muxc::ScrollViewer::SetVerticalScrollBarVisibility(
+        textEditor, muxc::ScrollBarVisibility::Auto);
+    state->textEditor = winrt::make_weak(textEditor);
+    textEditor.TextChanged(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    muxc::TextChangedEventArgs const&) {
+            auto state = weakState.lock();
+            auto editor = state ? state->textEditor.get() : nullptr;
+            if (!state || !editor || !state->textEditing ||
+                state->suppressTextChanged) {
+                return;
+            }
+            state->textDirty = editor.Text() != state->textOriginal;
+            BetterPanelUpdateTextControls(state);
+        });
+    textContent.Children().Append(textEditor);
+
+    auto textActions = BetterPanelMakeRow();
+    textActions.HorizontalAlignment(HorizontalAlignment::Left);
+
+    auto textEditButton =
+        BetterPanelMakeIconButton(L"Edit", L"\uE70F");
+    textEditButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelBeginTextEdit(state);
+            }
+        });
+    state->textEditButton = winrt::make_weak(textEditButton);
+    textActions.Children().Append(textEditButton);
+
+    auto textSaveButton =
+        BetterPanelMakeIconButton(L"Save", L"\uE74E");
+    textSaveButton.Visibility(Visibility::Collapsed);
+    textSaveButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelSaveTextEdit(state);
+            }
+        });
+    state->textSaveButton = winrt::make_weak(textSaveButton);
+    textActions.Children().Append(textSaveButton);
+
+    auto textCancelButton = BetterPanelMakeButton(L"Cancel");
+    textCancelButton.Visibility(Visibility::Collapsed);
+    textCancelButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelCancelTextEdit(state);
+            }
+        });
+    state->textCancelButton = winrt::make_weak(textCancelButton);
+    textActions.Children().Append(textCancelButton);
+
+    auto textReloadButton =
+        BetterPanelMakeIconButton(L"Reload", L"\uE72C");
+    textReloadButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (state && !state->textEditing &&
+                BetterPanelIsTextFile(state->selectedPath)) {
+                BetterPanelLoadTextPreview(state, state->selectedPath);
+                BetterPanelSetStatus(state->status, L"Reloading text preview");
+            }
+        });
+    state->textReloadButton = winrt::make_weak(textReloadButton);
+    textActions.Children().Append(textReloadButton);
+
+    textContent.Children().Append(textActions);
+    textCard.Child(textContent);
+    panel.Children().Append(textCard);
+
     panel.Children().Append(fileTitleRow);
     panel.Children().Append(transferRow);
     panel.Children().Append(multiActionRow);
