@@ -24,6 +24,10 @@ those elements and require a mod update even on an otherwise compatible release.
 - Native-looking Share, Open, Open with, and Copy path controls.
 - File-type icons, one clean title row, and pencil-button inline renaming.
 - Responsive image previews and animated GIF playback.
+- Inline PDF viewing with page navigation, page counts, scrolling, and sharp
+  50–250% re-rendered zoom.
+- A Print button for PDFs, text, images, and other file types that expose a
+  registered Windows print action.
 - Inline preview and editing for TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV,
   scripts, configuration files, and common source-code formats.
 - Explicit Edit, Save, Cancel, and Reload controls with encoding and line-ending
@@ -38,8 +42,10 @@ those elements and require a mod update even on an otherwise compatible release.
   destination subfolder.
 - Multi-selection Move to..., recycle-aware Delete, and Archive actions.
 
-Playback depends on codecs available to Windows. Archive choices depend on the
-archive applications and shell integrations installed on the computer.
+Playback depends on codecs available to Windows. Print appears only when the
+selected file type has a print handler registered in Windows. Archive choices
+depend on the archive applications and shell integrations installed on the
+computer.
 
 ## Installation
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.12.0
+
+- Added an inline PDF viewer powered by Windows' PDF rendering API.
+- Added previous/next page controls, current and total page counts, scrolling,
+  and 50–250% zoom.
+- Re-rendered PDF pages at each zoom level so enlarged text remains sharp.
+- Added a compact Print button beside Share, Open, Open with, and Copy.
+- Made Print appear dynamically for PDFs, text, images, and any other file type
+  with a print action registered in Windows.
+
 ## 1.11.0
 
 - Added inline preview and editing for common text, configuration, markup,

@@ -2,12 +2,12 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         1.11.0
+// @version         1.12.0
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -ldwmapi -lole32 -loleaut32 -lruntimeobject -lshell32
+// @compilerOptions -lcomctl32 -ldwmapi -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi
 // @license         GPL-3.0-or-later
 // ==/WindhawkMod==
 
@@ -60,6 +60,10 @@ mod changes even on an otherwise compatible Windows release.
 * Responsive image previews with inline expand and restore controls.
 * Animated GIF previews that use the original file instead of a static Explorer
   thumbnail.
+* An inline PDF viewer with multi-page navigation, sharp re-rendered zoom, and
+  scrolling for enlarged pages.
+* A compact **Print** action for PDFs, text, images, and any other selected file
+  type with a print command registered in Windows.
 * Inline preview and editing for TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV,
   scripts, configuration files, and common source-code formats, with explicit
   Save, Cancel, and Reload controls.
@@ -90,6 +94,13 @@ Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 1.12.0
+
+* Added an inline PDF viewer with previous/next page navigation, page counts,
+  scrolling, and 50–250% sharp re-rendered zoom.
+* Added a Print action beside the existing file actions whenever Windows has a
+  print handler registered for the selected file type.
 
 ### 1.11.0
 
@@ -1824,6 +1835,7 @@ using namespace std::string_view_literals;
 #include <dwmapi.h>
 #include <roapi.h>
 #include <shellapi.h>
+#include <shlwapi.h>
 #include <shlobj.h>
 #include <windows.graphics.effects.h>
 #include <winstring.h>
@@ -1844,6 +1856,7 @@ using namespace std::string_view_literals;
 #include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.Media.Core.h>
 #include <winrt/Windows.Media.Playback.h>
+#include <winrt/Windows.Data.Pdf.h>
 #include <winrt/Windows.Networking.Connectivity.h>
 #include <winrt/Windows.Storage.FileProperties.h>
 #include <winrt/Windows.Storage.Streams.h>
@@ -2295,6 +2308,8 @@ namespace muxp = winrt::Microsoft::UI::Xaml::Controls::Primitives;
 namespace mud = winrt::Microsoft::UI::Dispatching;
 namespace wmc = winrt::Windows::Media::Core;
 namespace wmp = winrt::Windows::Media::Playback;
+namespace wdp = winrt::Windows::Data::Pdf;
+namespace wss = winrt::Windows::Storage::Streams;
 namespace wsf = winrt::Windows::Storage::FileProperties;
 namespace ws = winrt::Windows::Storage;
 
@@ -2355,6 +2370,14 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::Button> textCancelButton;
     winrt::weak_ref<muxc::Button> textReloadButton;
     winrt::weak_ref<muxc::TextBlock> textInfo;
+    winrt::weak_ref<FrameworkElement> pdfCard;
+    winrt::weak_ref<muxc::Image> pdfImage;
+    winrt::weak_ref<muxc::TextBlock> pdfPageText;
+    winrt::weak_ref<muxc::TextBlock> pdfZoomText;
+    winrt::weak_ref<muxc::TextBlock> pdfInfo;
+    winrt::weak_ref<muxc::Button> pdfPreviousButton;
+    winrt::weak_ref<muxc::Button> pdfNextButton;
+    winrt::weak_ref<muxc::Button> printButton;
     uint32_t nativeShareIndex = 0;
     Thickness nativeShareMargin{};
     bool previewExpanded = false;
@@ -2379,6 +2402,12 @@ struct BetterPanelState {
     bool textEditing = false;
     bool textDirty = false;
     bool suppressTextChanged = false;
+    wdp::PdfDocument pdfDocument{nullptr};
+    std::wstring pdfLoadedPath;
+    uint32_t pdfPageIndex = 0;
+    double pdfZoom = 1.0;
+    double pdfBaseWidth = 420;
+    bool pdfLoading = false;
 };
 
 std::mutex g_betterPanelMutex;
@@ -2766,6 +2795,44 @@ bool BetterPanelIsTextFile(std::wstring_view path) {
         L".targets",    L".gitignore", L".gitattributes"};
     return std::find(std::begin(textExtensions), std::end(textExtensions),
                      extension) != std::end(textExtensions);
+}
+
+bool BetterPanelIsPdfFile(std::wstring_view path) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) {
+        return false;
+    }
+    std::wstring extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    return extension == L".pdf";
+}
+
+bool BetterPanelHasPrintHandler(std::wstring_view path) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) {
+        return false;
+    }
+    std::wstring extension(path.substr(dot));
+    WCHAR command[2048]{};
+    DWORD commandLength = static_cast<DWORD>(std::size(command));
+    return SUCCEEDED(AssocQueryStringW(
+               ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_COMMAND,
+               extension.c_str(), L"print", command, &commandLength)) &&
+           command[0] != L'\0';
+}
+
+bool BetterPanelPrintFile(std::wstring const& path) {
+    if (path.empty() || !BetterPanelHasPrintHandler(path)) {
+        return false;
+    }
+    SHELLEXECUTEINFOW executeInfo{sizeof(executeInfo)};
+    executeInfo.fMask = SEE_MASK_ASYNCOK;
+    executeInfo.hwnd = GetForegroundWindow();
+    executeInfo.lpVerb = L"print";
+    executeInfo.lpFile = path.c_str();
+    executeInfo.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&executeInfo) != FALSE;
 }
 
 struct BetterPanelTextFileData {
@@ -3905,6 +3972,134 @@ winrt::fire_and_forget BetterPanelLoadAnimatedGif(
     }
 }
 
+void BetterPanelUpdatePdfControls(
+    std::shared_ptr<BetterPanelState> const& state) {
+    uint32_t pageCount = state->pdfDocument ? state->pdfDocument.PageCount() : 0;
+    if (auto pageText = state->pdfPageText.get()) {
+        pageText.Text(pageCount
+                          ? L"Page " + std::to_wstring(state->pdfPageIndex + 1) +
+                                L" of " + std::to_wstring(pageCount)
+                          : L"Page -- of --");
+    }
+    if (auto zoomText = state->pdfZoomText.get()) {
+        zoomText.Text(std::to_wstring(
+                          static_cast<int>(std::lround(state->pdfZoom * 100))) +
+                      L"%");
+    }
+    if (auto previous = state->pdfPreviousButton.get()) {
+        previous.IsEnabled(!state->pdfLoading && pageCount > 0 &&
+                           state->pdfPageIndex > 0);
+    }
+    if (auto next = state->pdfNextButton.get()) {
+        next.IsEnabled(!state->pdfLoading && pageCount > 0 &&
+                       state->pdfPageIndex + 1 < pageCount);
+    }
+}
+
+winrt::fire_and_forget BetterPanelRenderPdfPage(
+    std::weak_ptr<BetterPanelState> weakState,
+    std::wstring path,
+    uint32_t pageIndex,
+    double zoom) {
+    auto state = weakState.lock();
+    if (!state || !state->pdfDocument || state->selectedPath != path ||
+        pageIndex >= state->pdfDocument.PageCount()) {
+        co_return;
+    }
+    auto document = state->pdfDocument;
+    state->pdfLoading = true;
+    if (auto info = state->pdfInfo.get()) {
+        info.Text(L"Rendering page…");
+        info.Visibility(Visibility::Visible);
+    }
+    BetterPanelUpdatePdfControls(state);
+
+    try {
+        auto page = document.GetPage(pageIndex);
+        auto pageBox = page.Dimensions().MediaBox();
+        uint32_t destinationWidth = static_cast<uint32_t>(std::clamp(
+            state->pdfBaseWidth * zoom * 1.75, 420.0, 2400.0));
+        uint32_t destinationHeight = static_cast<uint32_t>(std::max(
+            1.0, static_cast<double>(destinationWidth) * pageBox.Height /
+                     pageBox.Width));
+        wdp::PdfPageRenderOptions options;
+        options.DestinationWidth(destinationWidth);
+        options.DestinationHeight(destinationHeight);
+        wss::InMemoryRandomAccessStream stream;
+        co_await page.RenderToStreamAsync(stream, options);
+        stream.Seek(0);
+        winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap;
+        co_await bitmap.SetSourceAsync(stream);
+        page.Close();
+
+        state = weakState.lock();
+        if (!state || state->selectedPath != path ||
+            state->pdfLoadedPath != path || state->pdfPageIndex != pageIndex ||
+            std::abs(state->pdfZoom - zoom) > 0.001) {
+            co_return;
+        }
+        if (auto image = state->pdfImage.get()) {
+            image.Width(state->pdfBaseWidth * zoom);
+            image.Source(bitmap);
+        }
+        if (auto info = state->pdfInfo.get()) {
+            info.Text(L"");
+            info.Visibility(Visibility::Collapsed);
+        }
+    } catch (winrt::hresult_error const& ex) {
+        state = weakState.lock();
+        if (state && state->selectedPath == path) {
+            if (auto info = state->pdfInfo.get()) {
+                info.Text(L"This PDF page could not be displayed");
+                info.Visibility(Visibility::Visible);
+            }
+        }
+        Wh_Log(L"PDF render error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+    state = weakState.lock();
+    if (state && state->selectedPath == path &&
+        state->pdfPageIndex == pageIndex) {
+        state->pdfLoading = false;
+        BetterPanelUpdatePdfControls(state);
+    }
+}
+
+winrt::fire_and_forget BetterPanelLoadPdf(
+    std::weak_ptr<BetterPanelState> weakState,
+    std::wstring path) {
+    try {
+        auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+        auto document = co_await wdp::PdfDocument::LoadFromFileAsync(file);
+        auto state = weakState.lock();
+        if (!state || state->selectedPath != path) {
+            co_return;
+        }
+        state->pdfDocument = document;
+        state->pdfLoadedPath = path;
+        state->pdfPageIndex = 0;
+        state->pdfZoom = 1.0;
+        if (auto host = state->host.get()) {
+            state->pdfBaseWidth = std::clamp(host.ActualWidth() - 52.0,
+                                             260.0, 680.0);
+        }
+        BetterPanelUpdatePdfControls(state);
+        BetterPanelRenderPdfPage(weakState, path, 0, state->pdfZoom);
+    } catch (winrt::hresult_error const& ex) {
+        auto state = weakState.lock();
+        if (state && state->selectedPath == path) {
+            state->pdfLoading = false;
+            state->pdfDocument = nullptr;
+            if (auto info = state->pdfInfo.get()) {
+                info.Text(L"PDF preview unavailable (the file may be protected or damaged)");
+                info.Visibility(Visibility::Visible);
+            }
+            BetterPanelUpdatePdfControls(state);
+        }
+        Wh_Log(L"PDF load error %08X: %s", ex.code(), ex.message().c_str());
+    }
+}
+
 winrt::fire_and_forget BetterPanelLoadAndPlay(
     std::wstring path,
     winrt::weak_ref<muxc::TextBlock> weakStatus) {
@@ -4321,6 +4516,25 @@ void BetterPanelEnsureShareActions(
         });
     row.Children().Append(copyButton);
 
+    auto printButton = BetterPanelMakeIconButton(L"Print", L"\uE749");
+    printButton.Height(shareHeight);
+    printButton.Visibility(Visibility::Collapsed);
+    state->printButton = winrt::make_weak(printButton);
+    printButton.Click(
+        [weakStatus](winrt::Windows::Foundation::IInspectable const&,
+                     RoutedEventArgs const&) {
+            auto path = BetterPanelGetSelectedPath();
+            if (path.empty()) {
+                BetterPanelSetStatus(weakStatus, L"Select one file first");
+                return;
+            }
+            BetterPanelSetStatus(
+                weakStatus,
+                BetterPanelPrintFile(path) ? L"Print opened"
+                                           : L"Printing is unavailable for this file type");
+        });
+    row.Children().Append(printButton);
+
     auto extractButton = BetterPanelMakeIconButton(L"Extract", L"\uE8B7");
     extractButton.Height(shareHeight);
     extractButton.Visibility(Visibility::Collapsed);
@@ -4455,6 +4669,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     bool isGif = BetterPanelIsGifFile(path);
     bool isArchive = BetterPanelIsArchiveFile(path);
     bool isText = BetterPanelIsTextFile(path);
+    bool isPdf = BetterPanelIsPdfFile(path);
     auto activeSelection = BetterPanelGetActiveSelectionPaths();
     bool isMultiSelection = activeSelection.size() > 1;
     if (isMultiSelection) {
@@ -4464,6 +4679,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         isGif = BetterPanelIsGifFile(path);
         isArchive = BetterPanelIsArchiveFile(path);
         isText = BetterPanelIsTextFile(path);
+        isPdf = BetterPanelIsPdfFile(path);
     }
 
     if (auto multiActionRow = state->multiActionRow.get()) {
@@ -4529,6 +4745,12 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
                                      ? Visibility::Visible
                                      : Visibility::Collapsed);
     }
+    if (auto printButton = state->printButton.get()) {
+        printButton.Visibility(!isMultiSelection && !path.empty() &&
+                                       BetterPanelHasPrintHandler(path)
+                                   ? Visibility::Visible
+                                   : Visibility::Collapsed);
+    }
 
     if (!isMultiSelection && !path.empty()) {
         auto nativeTitle = state->nativeTitleContainer.get();
@@ -4576,6 +4798,11 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
                                 ? Visibility::Visible
                                 : Visibility::Collapsed);
     }
+    if (auto pdfCard = state->pdfCard.get()) {
+        pdfCard.Visibility(isPdf && !isMultiSelection
+                               ? Visibility::Visible
+                               : Visibility::Collapsed);
+    }
     if (auto fileTitleRow = state->fileTitleRow.get()) {
         fileTitleRow.Visibility(isMultiSelection ? Visibility::Collapsed
                                                  : Visibility::Visible);
@@ -4583,7 +4810,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     if (auto nativePreview = state->nativePreview.get()) {
         nativePreview.Visibility(!isMultiSelection &&
                                          (isAudio || isVideo || isGif ||
-                                          isText)
+                                          isText || isPdf)
                                      ? Visibility::Collapsed
                                      : Visibility::Visible);
     }
@@ -4599,6 +4826,20 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         state->textOriginal.clear();
         state->textEditable = false;
         state->textDirty = false;
+        state->pdfLoading = false;
+        state->pdfDocument = nullptr;
+        state->pdfLoadedPath.clear();
+        state->pdfPageIndex = 0;
+        state->pdfZoom = 1.0;
+        if (auto pdfImage = state->pdfImage.get()) {
+            pdfImage.Source(nullptr);
+        }
+        if (auto pdfInfo = state->pdfInfo.get()) {
+            pdfInfo.Text(isPdf ? L"Loading PDF…" : L"");
+            pdfInfo.Visibility(isPdf ? Visibility::Visible
+                                     : Visibility::Collapsed);
+        }
+        BetterPanelUpdatePdfControls(state);
         state->animatedGif = nullptr;
         state->gifExpanded = false;
         if (auto gifCard = state->gifCard.get()) {
@@ -4639,6 +4880,9 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
         if (isText) {
             BetterPanelLoadTextPreview(state, path);
+        }
+        if (isPdf) {
+            BetterPanelLoadPdf(state, path);
         }
     } else if (isGif && state->animatedGif) {
         if (auto gifImage = state->gifImage.get();
@@ -5156,6 +5400,12 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
                         gifCard.Height(state->gifNormalHeight);
                     }
                 }
+                state->pdfBaseWidth = std::clamp(
+                    static_cast<double>(args.NewSize().Width) - 52.0,
+                    260.0, 680.0);
+                if (auto pdfImage = state->pdfImage.get()) {
+                    pdfImage.Width(state->pdfBaseWidth * state->pdfZoom);
+                }
             }
         });
     videoCard.Child(videoPlayer);
@@ -5399,6 +5649,141 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     textContent.Children().Append(textActions);
     textCard.Child(textContent);
     panel.Children().Append(textCard);
+
+    muxc::Border pdfCard;
+    pdfCard.Name(L"BetterDetailPanelPdfCard");
+    pdfCard.Margin(Thickness{0, 4, 0, 0});
+    pdfCard.Padding(Thickness{10, 10, 10, 12});
+    pdfCard.CornerRadius(CornerRadius{8});
+    pdfCard.Visibility(Visibility::Collapsed);
+    pdfCard.HorizontalAlignment(HorizontalAlignment::Stretch);
+    state->pdfCard = winrt::make_weak(pdfCard.as<FrameworkElement>());
+
+    muxc::StackPanel pdfContent;
+    pdfContent.Spacing(8);
+
+    muxc::TextBlock pdfHeading;
+    pdfHeading.Text(L"PDF preview");
+    pdfHeading.FontWeight(
+        winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+    pdfContent.Children().Append(pdfHeading);
+
+    muxc::TextBlock pdfInfo;
+    pdfInfo.Text(L"Loading PDF…");
+    pdfInfo.FontSize(11);
+    pdfInfo.Opacity(0.72);
+    pdfInfo.TextWrapping(TextWrapping::Wrap);
+    state->pdfInfo = winrt::make_weak(pdfInfo);
+    pdfContent.Children().Append(pdfInfo);
+
+    muxc::Border pdfPageSurface;
+    pdfPageSurface.Height(460);
+    pdfPageSurface.HorizontalAlignment(HorizontalAlignment::Stretch);
+    pdfPageSurface.CornerRadius(CornerRadius{4});
+
+    muxc::ScrollViewer pdfScroller;
+    pdfScroller.HorizontalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
+    pdfScroller.VerticalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
+    pdfScroller.HorizontalScrollMode(muxc::ScrollMode::Enabled);
+    pdfScroller.VerticalScrollMode(muxc::ScrollMode::Enabled);
+
+    muxc::Image pdfImage;
+    pdfImage.Stretch(winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
+    pdfImage.HorizontalAlignment(HorizontalAlignment::Center);
+    pdfImage.VerticalAlignment(VerticalAlignment::Top);
+    state->pdfImage = winrt::make_weak(pdfImage);
+    pdfScroller.Content(pdfImage);
+    pdfPageSurface.Child(pdfScroller);
+    pdfContent.Children().Append(pdfPageSurface);
+
+    auto pdfNavigation = BetterPanelMakeRow();
+    pdfNavigation.HorizontalAlignment(HorizontalAlignment::Center);
+
+    auto pdfPrevious = BetterPanelMakeIconButton(L"Previous", L"\uE76B");
+    pdfPrevious.IsEnabled(false);
+    state->pdfPreviousButton = winrt::make_weak(pdfPrevious);
+    pdfPrevious.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state || state->pdfLoading || !state->pdfDocument ||
+                state->pdfPageIndex == 0) {
+                return;
+            }
+            --state->pdfPageIndex;
+            BetterPanelUpdatePdfControls(state);
+            BetterPanelRenderPdfPage(weakState, state->selectedPath,
+                                     state->pdfPageIndex, state->pdfZoom);
+        });
+    pdfNavigation.Children().Append(pdfPrevious);
+
+    muxc::TextBlock pdfPageText;
+    pdfPageText.Text(L"Page -- of --");
+    pdfPageText.MinWidth(96);
+    pdfPageText.TextAlignment(TextAlignment::Center);
+    pdfPageText.VerticalAlignment(VerticalAlignment::Center);
+    state->pdfPageText = winrt::make_weak(pdfPageText);
+    pdfNavigation.Children().Append(pdfPageText);
+
+    auto pdfNext = BetterPanelMakeIconButton(L"Next", L"\uE76C");
+    pdfNext.IsEnabled(false);
+    state->pdfNextButton = winrt::make_weak(pdfNext);
+    pdfNext.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state || state->pdfLoading || !state->pdfDocument ||
+                state->pdfPageIndex + 1 >= state->pdfDocument.PageCount()) {
+                return;
+            }
+            ++state->pdfPageIndex;
+            BetterPanelUpdatePdfControls(state);
+            BetterPanelRenderPdfPage(weakState, state->selectedPath,
+                                     state->pdfPageIndex, state->pdfZoom);
+        });
+    pdfNavigation.Children().Append(pdfNext);
+    pdfContent.Children().Append(pdfNavigation);
+
+    auto pdfZoomRow = BetterPanelMakeRow();
+    pdfZoomRow.HorizontalAlignment(HorizontalAlignment::Center);
+
+    auto pdfZoomOut = BetterPanelMakeIconButton(L"Zoom out", L"\uE71F");
+    pdfZoomOut.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state || state->pdfLoading || !state->pdfDocument) return;
+            state->pdfZoom = std::max(0.5, state->pdfZoom - 0.25);
+            BetterPanelUpdatePdfControls(state);
+            BetterPanelRenderPdfPage(weakState, state->selectedPath,
+                                     state->pdfPageIndex, state->pdfZoom);
+        });
+    pdfZoomRow.Children().Append(pdfZoomOut);
+
+    muxc::TextBlock pdfZoomText;
+    pdfZoomText.Text(L"100%");
+    pdfZoomText.MinWidth(52);
+    pdfZoomText.TextAlignment(TextAlignment::Center);
+    pdfZoomText.VerticalAlignment(VerticalAlignment::Center);
+    state->pdfZoomText = winrt::make_weak(pdfZoomText);
+    pdfZoomRow.Children().Append(pdfZoomText);
+
+    auto pdfZoomIn = BetterPanelMakeIconButton(L"Zoom in", L"\uE8A3");
+    pdfZoomIn.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state || state->pdfLoading || !state->pdfDocument) return;
+            state->pdfZoom = std::min(2.5, state->pdfZoom + 0.25);
+            BetterPanelUpdatePdfControls(state);
+            BetterPanelRenderPdfPage(weakState, state->selectedPath,
+                                     state->pdfPageIndex, state->pdfZoom);
+        });
+    pdfZoomRow.Children().Append(pdfZoomIn);
+    pdfContent.Children().Append(pdfZoomRow);
+
+    pdfCard.Child(pdfContent);
+    panel.Children().Append(pdfCard);
 
     panel.Children().Append(fileTitleRow);
     panel.Children().Append(transferRow);
