@@ -13,12 +13,6 @@
 
 // Copyright (C) 2026 Nicole S
 //
-// Better Panel's panel features and interface are by Nicole S. This package
-// integrates the open-source XAML diagnostics foundation from Windows 11 File
-// Explorer Styler by Michael Maltsev (m417z) so both sets of functionality can
-// operate through Explorer's single diagnostics connection:
-// https://github.com/m417z/my-windhawk-mods
-//
 // This program is free software: you can redistribute it and/or modify it
 // under the terms of the GNU General Public License as published by the Free
 // Software Foundation, either version 3 of the License, or (at your option) any
@@ -156,15 +150,10 @@ is enabled.
 
 ## Attribution
 
-Better Panel's panel features and interface are by Nicole S. The standalone
-package integrates the open-source XAML diagnostics foundation from **Windows
-11 File Explorer Styler** by Michael Maltsev (m417z) because Explorer permits
-only one diagnostics consumer at a time. This lets both sets of functionality
-share one connection; Better Panel is not a Styler rebrand. The shared
-foundation remains covered by its original license and attribution.
-
-Better Panel doesn't include or expose the Styler themes, theme settings,
-styling guide, translucent effects, or customization documentation.
+Better Panel is a separate mod created by Nicole S. Its XAML diagnostics
+compatibility layer exists so Explorer functionality that needs the single
+diagnostics connection can work together without turning Better Panel into a
+theme or styling mod.
 */
 // ==/WindhawkModReadme==
 
@@ -5026,8 +5015,8 @@ struct StyleVariableConsumer {
 };
 
 // Mod-global style variable registry. The struct mirrors the per-XamlRoot state
-// used by the taskbar styler so the variable-resolution call paths stay aligned
-// across the styler mods, but here all elements share one registry.
+    // Keep the variable-resolution call paths aligned while all elements share
+    // one registry.
 struct StyleVariableState {
     std::unordered_map<std::wstring, StyleVariableValue> variables;
     std::unordered_map<std::wstring, std::vector<StyleVariableConsumer>>
@@ -9950,7 +9939,7 @@ void MergeResourceVariables() {
 }
 
 const Theme* GetSelectedTheme() {
-    // Better Panel doesn't expose or activate legacy Styler themes.
+    // Better Panel doesn't expose or activate themes.
     return nullptr;
 #if 0
     PCWSTR themeName = Wh_GetStringSetting(L"theme");
@@ -10465,7 +10454,7 @@ InitializeXamlDiagnosticsEx_Hook(_In_ PCWSTR endPointName,
                 L"Note: You can change this behavior in the mod settings.",
                 modulePathStr);
             int result = MessageBox(
-                nullptr, message, L"Windows 11 File Explorer Styler - Windhawk",
+                    nullptr, message, L"Better Panel for Windows 11 - Windhawk",
                 MB_YESNO | MB_ICONQUESTION | MB_TOPMOST);
             blockCall = (result == IDYES);
             break;

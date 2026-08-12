@@ -78,11 +78,8 @@ Open a GitHub issue and include:
 
 Copyright (C) 2026 Nicole S.
 
-Better Panel's panel features and interface are by Nicole S. The package
-integrates the open-source XAML diagnostics foundation from
-[Windows 11 File Explorer Styler](https://github.com/m417z/my-windhawk-mods)
-by Michael Maltsev (m417z) because Explorer allows only one diagnostics consumer
-at a time. This lets the two sets of functionality share one connection; Better
-Panel is not a Styler rebrand.
+Better Panel is its own separate mod. Its XAML diagnostics compatibility layer
+allows Explorer functionality that needs the single diagnostics connection to
+work together; it does not make Better Panel a theme or styling mod.
 
 Distributed under the [GNU General Public License v3.0 or later](LICENSE).
