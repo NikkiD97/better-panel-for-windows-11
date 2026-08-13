@@ -19,18 +19,25 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
-## Known issue: screen recording and media capture
+## Known bug: screen recording and resource-heavy previews
 
 Screen-recording or capture software that uses GPU hardware acceleration,
 hardware video encoding, overlays, or system-audio capture may conflict with
-Explorer's media pipeline while Better Panel is previewing audio or video. This
-can cause playback glitches, missing frames, slow interface updates, or Explorer
-instability during recording even when the same actions work normally without
-the recorder running.
+Explorer while Better Panel is performing resource-heavy preview or file
+operations. This has been observed mainly when viewing PDFs, playing video, or
+working with archives; audio previews may also be affected. Symptoms can include
+playback glitches, missing frames, slow interface updates, failed operations, or
+Explorer instability even when the same actions work normally without the
+recorder running.
+
+Windows and File Explorer should otherwise continue running normally while a
+recorder and Better Panel are active. The problem is most likely to appear when
+opening PDFs, playing media, previewing archive contents, or extracting and
+creating archives during an active recording.
 
 If this occurs, try disabling hardware acceleration or system-audio capture in
 the recorder, lowering its resolution or frame rate, recording only a selected
-region, or closing the recorder before using Better Panel's media preview.
+region, or closing the recorder before using these Better Panel features.
 
 ## Features
 
