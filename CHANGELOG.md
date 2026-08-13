@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.13.2
+
+- Fixed Backspace navigating Explorer while editing text. Explorer consumed the
+  key as Back navigation before the injected editor, so Better Panel now routes
+  it to the active editor first.
+
 ## 1.13.1
 
 - Fixed video resizing during playback.

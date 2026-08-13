@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         1.13.1
+// @version         1.13.2
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -102,6 +102,12 @@ Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 1.13.2
+
+* Fixed Backspace navigating Explorer while editing text. Explorer consumed the
+  key as Back navigation before the injected editor, so Better Panel now routes
+  it to the active editor first.
 
 ### 1.13.1
 
@@ -2487,6 +2493,84 @@ bool g_betterMediaMuted = false;
 double g_betterPlaybackRate = 1.0;
 bool g_betterRepeatEnabled = false;
 bool g_betterShuffleEnabled = false;
+
+void BetterPanelApplyEditorBackspace(muxc::TextBox const& editor) {
+    int32_t selectionStart = editor.SelectionStart();
+    int32_t selectionLength = editor.SelectionLength();
+    if (selectionLength == 0) {
+        if (selectionStart <= 0) return;
+
+        auto text = editor.Text();
+        int32_t deleteLength = 1;
+        if (selectionStart >= 2) {
+            wchar_t previous = text.c_str()[selectionStart - 1];
+            wchar_t beforePrevious = text.c_str()[selectionStart - 2];
+            bool surrogatePair = previous >= 0xDC00 && previous <= 0xDFFF &&
+                                 beforePrevious >= 0xD800 &&
+                                 beforePrevious <= 0xDBFF;
+            bool windowsNewline = previous == L'\n' && beforePrevious == L'\r';
+            if (surrogatePair || windowsNewline) deleteLength = 2;
+        }
+        selectionStart -= deleteLength;
+        editor.Select(selectionStart, deleteLength);
+    }
+
+    editor.SelectedText(L"");
+    editor.Select(selectionStart, 0);
+}
+
+bool BetterPanelConsumeBackspaceMessage(MSG* message) {
+    if (!message || message->message != WM_KEYDOWN ||
+        message->wParam != VK_BACK) {
+        return false;
+    }
+
+    try {
+        std::lock_guard lock(g_betterPanelMutex);
+        for (auto const& state : g_betterPanels) {
+            if (!state || !state->textEditing || !state->dispatcher ||
+                !state->dispatcher.HasThreadAccess()) {
+                continue;
+            }
+            if (auto editor = state->textEditor.get()) {
+                BetterPanelApplyEditorBackspace(editor);
+                message->message = WM_NULL;
+                message->wParam = 0;
+                message->lParam = 0;
+                return true;
+            }
+        }
+    } catch (...) {
+    }
+    return false;
+}
+
+using GetMessageW_t = decltype(&GetMessageW);
+GetMessageW_t GetMessageW_Original;
+BOOL WINAPI GetMessageW_Hook(LPMSG message,
+                             HWND window,
+                             UINT minimumMessage,
+                             UINT maximumMessage) {
+    BOOL result =
+        GetMessageW_Original(message, window, minimumMessage, maximumMessage);
+    if (result > 0) BetterPanelConsumeBackspaceMessage(message);
+    return result;
+}
+
+using PeekMessageW_t = decltype(&PeekMessageW);
+PeekMessageW_t PeekMessageW_Original;
+BOOL WINAPI PeekMessageW_Hook(LPMSG message,
+                              HWND window,
+                              UINT minimumMessage,
+                              UINT maximumMessage,
+                              UINT removeMessage) {
+    BOOL result = PeekMessageW_Original(message, window, minimumMessage,
+                                        maximumMessage, removeMessage);
+    if (result && (removeMessage & PM_REMOVE)) {
+        BetterPanelConsumeBackspaceMessage(message);
+    }
+    return result;
+}
 
 std::wstring BetterPanelExtractPath(IShellBrowser* shellBrowser) {
     if (!shellBrowser) {
@@ -13406,6 +13490,10 @@ BOOL Wh_ModInit() {
 
     WindhawkUtils::SetFunctionHook(CreateWindowExW, CreateWindowExW_Hook,
                                    &CreateWindowExW_Original);
+    WindhawkUtils::SetFunctionHook(GetMessageW, GetMessageW_Hook,
+                                   &GetMessageW_Original);
+    WindhawkUtils::SetFunctionHook(PeekMessageW, PeekMessageW_Hook,
+                                   &PeekMessageW_Original);
 
     HMODULE kernelBaseModule = GetModuleHandle(L"kernelbase.dll");
     auto pKernelBaseLoadLibraryExW = (decltype(&LoadLibraryExW))GetProcAddress(
