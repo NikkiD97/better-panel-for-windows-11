@@ -19,6 +19,19 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
+## Known issue: screen recording and media capture
+
+Screen-recording or capture software that uses GPU hardware acceleration,
+hardware video encoding, overlays, or system-audio capture may conflict with
+Explorer's media pipeline while Better Panel is previewing audio or video. This
+can cause playback glitches, missing frames, slow interface updates, or Explorer
+instability during recording even when the same actions work normally without
+the recorder running.
+
+If this occurs, try disabling hardware acceleration or system-audio capture in
+the recorder, lowering its resolution or frame rate, recording only a selected
+region, or closing the recorder before using Better Panel's media preview.
+
 ## Features
 
 - Native-looking Share, Open, and Open with controls.
