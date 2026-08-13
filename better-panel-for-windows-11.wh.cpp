@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         1.13.2
+// @version         1.14.0
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -2357,6 +2357,17 @@ enum class BetterPanelTextEncoding {
     Ansi,
 };
 
+struct BetterPanelAudioMetadata {
+    std::wstring title;
+    std::wstring artist;
+    std::wstring album;
+    std::wstring genre;
+    std::wstring year;
+    std::wstring rating;
+    std::wstring tags;
+    std::wstring comments;
+};
+
 struct BetterPanelState {
     mud::DispatcherQueue dispatcher{nullptr};
     DispatcherTimer timer{nullptr};
@@ -2433,6 +2444,23 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> insightsCard;
     winrt::weak_ref<muxc::StackPanel> insightsContent;
     winrt::weak_ref<muxc::Button> insightsToggleButton;
+    winrt::weak_ref<FrameworkElement> metadataCard;
+    winrt::weak_ref<muxc::StackPanel> metadataContent;
+    winrt::weak_ref<muxc::Button> metadataToggleButton;
+    winrt::weak_ref<muxc::TextBox> metadataTitle;
+    winrt::weak_ref<muxc::TextBox> metadataArtist;
+    winrt::weak_ref<muxc::TextBox> metadataAlbum;
+    winrt::weak_ref<muxc::TextBox> metadataGenre;
+    winrt::weak_ref<muxc::TextBox> metadataYear;
+    winrt::weak_ref<muxc::TextBox> metadataRating;
+    winrt::weak_ref<muxc::TextBox> metadataTags;
+    winrt::weak_ref<muxc::TextBox> metadataComments;
+    winrt::weak_ref<muxc::TextBox> metadataFocusedEditor;
+    winrt::weak_ref<muxc::Button> metadataEditButton;
+    winrt::weak_ref<muxc::Button> metadataSaveButton;
+    winrt::weak_ref<muxc::Button> metadataCancelButton;
+    winrt::weak_ref<muxc::Button> metadataReloadButton;
+    winrt::weak_ref<muxc::TextBlock> metadataInfo;
     winrt::weak_ref<muxc::TextBlock> hashText;
     winrt::weak_ref<muxc::Button> hashCopyButton;
     winrt::weak_ref<FrameworkElement> pdfPageSurface;
@@ -2479,6 +2507,14 @@ struct BetterPanelState {
     bool multiSummaryLoading = false;
     bool previewsCollapsed = false;
     bool insightsCollapsed = false;
+    BetterPanelAudioMetadata metadataOriginal;
+    std::wstring metadataLoadedPath;
+    std::wstring metadataCopyText;
+    bool metadataLoading = false;
+    bool metadataEditing = false;
+    bool metadataDirty = false;
+    bool suppressMetadataChanged = false;
+    bool metadataCollapsed = false;
     std::wstring archivePreviewPath;
     bool archivePreviewLoading = false;
 };
@@ -2528,11 +2564,17 @@ bool BetterPanelConsumeBackspaceMessage(MSG* message) {
     try {
         std::lock_guard lock(g_betterPanelMutex);
         for (auto const& state : g_betterPanels) {
-            if (!state || !state->textEditing || !state->dispatcher ||
+            if (!state || !state->dispatcher ||
                 !state->dispatcher.HasThreadAccess()) {
                 continue;
             }
-            if (auto editor = state->textEditor.get()) {
+            muxc::TextBox editor{nullptr};
+            if (state->textEditing) {
+                editor = state->textEditor.get();
+            } else if (state->metadataEditing) {
+                editor = state->metadataFocusedEditor.get();
+            }
+            if (editor) {
                 BetterPanelApplyEditorBackspace(editor);
                 message->message = WM_NULL;
                 message->wParam = 0;
@@ -4961,6 +5003,397 @@ void BetterPanelAddInsightRow(
     panel.Children().Append(row);
 }
 
+std::wstring BetterPanelTrimMetadataValue(std::wstring value) {
+    auto first = value.find_first_not_of(L" \t\r\n");
+    if (first == std::wstring::npos) return L"";
+    auto last = value.find_last_not_of(L" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::vector<winrt::hstring> BetterPanelSplitMetadataValues(
+    std::wstring const& text) {
+    std::vector<winrt::hstring> result;
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t end = text.find_first_of(L",;", start);
+        auto value = BetterPanelTrimMetadataValue(
+            text.substr(start, end == std::wstring::npos
+                                   ? std::wstring::npos
+                                   : end - start));
+        if (!value.empty()) result.emplace_back(value);
+        if (end == std::wstring::npos) break;
+        start = end + 1;
+    }
+    return result;
+}
+
+std::wstring BetterPanelJoinMetadataValues(
+    winrt::Windows::Foundation::Collections::IIterable<winrt::hstring> const&
+        values) {
+    std::wstring result;
+    for (auto const& value : values) {
+        if (value.empty()) continue;
+        if (!result.empty()) result += L", ";
+        result += value.c_str();
+    }
+    return result;
+}
+
+std::wstring BetterPanelPropertyString(
+    winrt::Windows::Foundation::Collections::IMap<
+        winrt::hstring, winrt::Windows::Foundation::IInspectable> const& values,
+    wchar_t const* name) {
+    try {
+        if (!values.HasKey(name)) return L"";
+        auto property = values.Lookup(name)
+                            .try_as<winrt::Windows::Foundation::IPropertyValue>();
+        if (!property) return L"";
+        if (property.Type() ==
+            winrt::Windows::Foundation::PropertyType::String) {
+            return property.GetString().c_str();
+        }
+    } catch (...) {
+    }
+    return L"";
+}
+
+std::wstring BetterPanelPropertyStringArray(
+    winrt::Windows::Foundation::Collections::IMap<
+        winrt::hstring, winrt::Windows::Foundation::IInspectable> const& values,
+    wchar_t const* name) {
+    try {
+        if (!values.HasKey(name)) return L"";
+        auto property = values.Lookup(name)
+                            .try_as<winrt::Windows::Foundation::IPropertyValue>();
+        if (!property) return L"";
+        if (property.Type() ==
+            winrt::Windows::Foundation::PropertyType::StringArray) {
+            winrt::com_array<winrt::hstring> items;
+            property.GetStringArray(items);
+            std::wstring result;
+            for (auto const& item : items) {
+                if (item.empty()) continue;
+                if (!result.empty()) result += L", ";
+                result += item.c_str();
+            }
+            return result;
+        }
+    } catch (...) {
+    }
+    return L"";
+}
+
+std::wstring BetterPanelMetadataRatingText(uint32_t rating) {
+    if (rating == 0) return L"";
+    if (rating < 25) return L"1";
+    if (rating < 50) return L"2";
+    if (rating < 75) return L"3";
+    if (rating < 99) return L"4";
+    return L"5";
+}
+
+uint32_t BetterPanelMetadataRatingValue(uint32_t rating) {
+    static constexpr uint32_t values[] = {0, 1, 25, 50, 75, 99};
+    return rating <= 5 ? values[rating] : 0;
+}
+
+std::vector<muxc::TextBox> BetterPanelMetadataEditors(
+    std::shared_ptr<BetterPanelState> const& state) {
+    std::vector<muxc::TextBox> editors;
+    for (auto const& weakEditor :
+         {state->metadataTitle, state->metadataArtist, state->metadataAlbum,
+          state->metadataGenre, state->metadataYear, state->metadataRating,
+          state->metadataTags, state->metadataComments}) {
+        if (auto editor = weakEditor.get()) editors.push_back(editor);
+    }
+    return editors;
+}
+
+BetterPanelAudioMetadata BetterPanelCurrentMetadata(
+    std::shared_ptr<BetterPanelState> const& state) {
+    BetterPanelAudioMetadata data;
+    if (auto field = state->metadataTitle.get()) data.title = field.Text();
+    if (auto field = state->metadataArtist.get()) data.artist = field.Text();
+    if (auto field = state->metadataAlbum.get()) data.album = field.Text();
+    if (auto field = state->metadataGenre.get()) data.genre = field.Text();
+    if (auto field = state->metadataYear.get()) data.year = field.Text();
+    if (auto field = state->metadataRating.get()) data.rating = field.Text();
+    if (auto field = state->metadataTags.get()) data.tags = field.Text();
+    if (auto field = state->metadataComments.get()) data.comments = field.Text();
+    return data;
+}
+
+std::wstring BetterPanelFormatMetadata(BetterPanelAudioMetadata const& data) {
+    return L"Title: " + data.title + L"\r\nArtist: " + data.artist +
+           L"\r\nAlbum: " + data.album + L"\r\nGenre: " + data.genre +
+           L"\r\nYear: " + data.year + L"\r\nRating: " + data.rating +
+           L"\r\nTags: " + data.tags + L"\r\nComments: " + data.comments;
+}
+
+void BetterPanelSetMetadataFields(
+    std::shared_ptr<BetterPanelState> const& state,
+    BetterPanelAudioMetadata const& data) {
+    state->suppressMetadataChanged = true;
+    if (auto field = state->metadataTitle.get()) field.Text(data.title);
+    if (auto field = state->metadataArtist.get()) field.Text(data.artist);
+    if (auto field = state->metadataAlbum.get()) field.Text(data.album);
+    if (auto field = state->metadataGenre.get()) field.Text(data.genre);
+    if (auto field = state->metadataYear.get()) field.Text(data.year);
+    if (auto field = state->metadataRating.get()) field.Text(data.rating);
+    if (auto field = state->metadataTags.get()) field.Text(data.tags);
+    if (auto field = state->metadataComments.get()) field.Text(data.comments);
+    state->suppressMetadataChanged = false;
+}
+
+void BetterPanelUpdateMetadataControls(
+    std::shared_ptr<BetterPanelState> const& state) {
+    for (auto const& editor : BetterPanelMetadataEditors(state)) {
+        editor.IsReadOnly(!state->metadataEditing);
+    }
+    if (auto button = state->metadataEditButton.get()) {
+        button.Visibility(!state->metadataEditing && !state->metadataLoading
+                              ? Visibility::Visible
+                              : Visibility::Collapsed);
+    }
+    if (auto button = state->metadataSaveButton.get()) {
+        button.Visibility(state->metadataEditing ? Visibility::Visible
+                                                 : Visibility::Collapsed);
+        button.IsEnabled(state->metadataDirty && !state->metadataLoading);
+    }
+    if (auto button = state->metadataCancelButton.get()) {
+        button.Visibility(state->metadataEditing ? Visibility::Visible
+                                                 : Visibility::Collapsed);
+    }
+    if (auto button = state->metadataReloadButton.get()) {
+        button.Visibility(!state->metadataEditing && !state->metadataLoading
+                              ? Visibility::Visible
+                              : Visibility::Collapsed);
+    }
+}
+
+winrt::fire_and_forget BetterPanelLoadAudioMetadata(
+    std::weak_ptr<BetterPanelState> weakState, std::wstring path) {
+    auto state = weakState.lock();
+    if (!state || path.empty() || state->metadataEditing) co_return;
+    state->metadataLoading = true;
+    BetterPanelUpdateMetadataControls(state);
+    if (auto info = state->metadataInfo.get()) info.Text(L"Reading metadata…");
+    try {
+        auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+        auto music = co_await file.Properties().GetMusicPropertiesAsync();
+        auto keys = winrt::single_threaded_vector<winrt::hstring>();
+        keys.Append(L"System.Keywords");
+        keys.Append(L"System.Comment");
+        auto extra = co_await file.Properties().RetrievePropertiesAsync(keys);
+
+        BetterPanelAudioMetadata data;
+        data.title = music.Title().c_str();
+        data.artist = music.Artist().c_str();
+        data.album = music.Album().c_str();
+        data.genre = BetterPanelJoinMetadataValues(music.Genre());
+        if (music.Year()) data.year = std::to_wstring(music.Year());
+        data.rating = BetterPanelMetadataRatingText(music.Rating());
+        data.tags = BetterPanelPropertyStringArray(extra, L"System.Keywords");
+        data.comments = BetterPanelPropertyString(extra, L"System.Comment");
+
+        state = weakState.lock();
+        if (!state || state->unloaded || state->selectedPath != path) co_return;
+        state->metadataLoading = false;
+        state->metadataLoadedPath = path;
+        state->metadataOriginal = data;
+        state->metadataCopyText = BetterPanelFormatMetadata(data);
+        state->metadataDirty = false;
+        BetterPanelSetMetadataFields(state, data);
+        BetterPanelUpdateMetadataControls(state);
+        if (auto info = state->metadataInfo.get()) {
+            info.Text(L"Edit support depends on the audio format and its Windows property handler.");
+        }
+    } catch (winrt::hresult_error const& ex) {
+        state = weakState.lock();
+        if (!state || state->selectedPath != path) co_return;
+        state->metadataLoading = false;
+        BetterPanelUpdateMetadataControls(state);
+        if (auto info = state->metadataInfo.get()) {
+            info.Text(L"Metadata is unavailable for this audio format.");
+        }
+        Wh_Log(L"Metadata load error %08X: %s", ex.code(), ex.message().c_str());
+    }
+}
+
+void BetterPanelBeginMetadataEdit(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state || state->metadataLoading || state->metadataLoadedPath !=
+                                               state->selectedPath) {
+        return;
+    }
+    state->metadataEditing = true;
+    state->metadataDirty = false;
+    BetterPanelUpdateMetadataControls(state);
+    if (auto field = state->metadataTitle.get()) field.Focus(FocusState::Programmatic);
+    if (auto info = state->metadataInfo.get()) {
+        info.Text(L"Rating accepts 0–5. Separate genres and tags with commas.");
+    }
+}
+
+void BetterPanelCancelMetadataEdit(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state || !state->metadataEditing) return;
+    state->metadataEditing = false;
+    state->metadataDirty = false;
+    state->metadataFocusedEditor = {};
+    BetterPanelSetMetadataFields(state, state->metadataOriginal);
+    BetterPanelUpdateMetadataControls(state);
+    if (auto info = state->metadataInfo.get()) {
+        info.Text(L"Changes discarded.");
+    }
+}
+
+bool BetterPanelParseMetadataNumber(std::wstring text, uint32_t maximum,
+                                    uint32_t* value) {
+    text = BetterPanelTrimMetadataValue(std::move(text));
+    if (text.empty()) {
+        *value = 0;
+        return true;
+    }
+    wchar_t* end = nullptr;
+    unsigned long parsed = wcstoul(text.c_str(), &end, 10);
+    if (!end || *end != L'\0' || parsed > maximum) return false;
+    *value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+winrt::fire_and_forget BetterPanelSaveAudioMetadata(
+    std::weak_ptr<BetterPanelState> weakState) {
+    auto state = weakState.lock();
+    if (!state || !state->metadataEditing || !state->metadataDirty) co_return;
+    std::wstring path = state->selectedPath;
+    auto data = BetterPanelCurrentMetadata(state);
+    uint32_t year = 0;
+    uint32_t rating = 0;
+    if (!BetterPanelParseMetadataNumber(data.year, 9999, &year)) {
+        BetterPanelSetStatus(state->status, L"Year must be a number from 0 to 9999");
+        co_return;
+    }
+    if (!BetterPanelParseMetadataNumber(data.rating, 5, &rating)) {
+        BetterPanelSetStatus(state->status, L"Rating must be a number from 0 to 5");
+        co_return;
+    }
+
+    state->metadataLoading = true;
+    BetterPanelUpdateMetadataControls(state);
+    if (auto info = state->metadataInfo.get()) info.Text(L"Saving metadata…");
+    BetterPanelStopStateMedia(state, path);
+    try {
+        auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+        auto properties = winrt::single_threaded_map<
+            winrt::hstring, winrt::Windows::Foundation::IInspectable>();
+        properties.Insert(L"System.Title", winrt::box_value(data.title));
+        properties.Insert(L"System.Music.Artist", winrt::box_value(data.artist));
+        properties.Insert(L"System.Music.AlbumTitle", winrt::box_value(data.album));
+        auto genres = BetterPanelSplitMetadataValues(data.genre);
+        properties.Insert(
+            L"System.Music.Genre",
+            winrt::Windows::Foundation::PropertyValue::CreateStringArray(genres));
+        properties.Insert(L"System.Media.Year", winrt::box_value(year));
+        properties.Insert(L"System.Rating",
+                          winrt::box_value(BetterPanelMetadataRatingValue(rating)));
+        auto tags = BetterPanelSplitMetadataValues(data.tags);
+        properties.Insert(
+            L"System.Keywords",
+            winrt::Windows::Foundation::PropertyValue::CreateStringArray(tags));
+        properties.Insert(L"System.Comment", winrt::box_value(data.comments));
+        co_await file.Properties().SavePropertiesAsync(properties);
+
+        state = weakState.lock();
+        if (!state || state->unloaded || state->selectedPath != path) co_return;
+        state->metadataLoading = false;
+        state->metadataEditing = false;
+        state->metadataDirty = false;
+        state->metadataFocusedEditor = {};
+        BetterPanelUpdateMetadataControls(state);
+        if (auto info = state->metadataInfo.get()) info.Text(L"Metadata saved.");
+        BetterPanelSetStatus(state->status, L"Audio metadata saved");
+        SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, path.c_str(), nullptr);
+        BetterPanelLoadAudioMetadata(weakState, path);
+    } catch (winrt::hresult_error const& ex) {
+        state = weakState.lock();
+        if (!state || state->selectedPath != path) co_return;
+        state->metadataLoading = false;
+        BetterPanelUpdateMetadataControls(state);
+        if (auto info = state->metadataInfo.get()) {
+            info.Text(L"Windows could not write metadata to this file format.");
+        }
+        BetterPanelSetStatus(state->status, L"Metadata save failed");
+        Wh_Log(L"Metadata save error %08X: %s", ex.code(), ex.message().c_str());
+    }
+}
+
+muxc::TextBox BetterPanelAddMetadataField(
+    muxc::StackPanel const& panel, wchar_t const* label,
+    wchar_t const* placeholder, bool multiline,
+    std::weak_ptr<BetterPanelState> weakState) {
+    muxc::Grid row;
+    row.ColumnSpacing(8);
+    muxc::ColumnDefinition labelColumn;
+    labelColumn.Width(GridLength{112, GridUnitType::Pixel});
+    muxc::ColumnDefinition editorColumn;
+    editorColumn.Width(GridLength{1, GridUnitType::Star});
+    row.ColumnDefinitions().Append(labelColumn);
+    row.ColumnDefinitions().Append(editorColumn);
+
+    muxc::TextBlock labelText;
+    labelText.Text(label);
+    labelText.FontSize(11);
+    labelText.Opacity(0.72);
+    labelText.VerticalAlignment(VerticalAlignment::Center);
+    row.Children().Append(labelText);
+
+    muxc::TextBox editor;
+    editor.PlaceholderText(placeholder);
+    editor.FontSize(12);
+    editor.Padding(Thickness{8, 4, 8, 4});
+    editor.HorizontalAlignment(HorizontalAlignment::Stretch);
+    editor.IsReadOnly(true);
+    editor.IsSpellCheckEnabled(false);
+    editor.IsTextPredictionEnabled(false);
+    if (multiline) {
+        editor.AcceptsReturn(true);
+        editor.TextWrapping(TextWrapping::Wrap);
+        editor.MinHeight(70);
+    }
+    muxc::Grid::SetColumn(editor, 1);
+    editor.TextChanged(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    muxc::TextChangedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state || !state->metadataEditing ||
+                state->suppressMetadataChanged) {
+                return;
+            }
+            state->metadataDirty = true;
+            BetterPanelUpdateMetadataControls(state);
+        });
+    editor.GotFocus(
+        [weakState](winrt::Windows::Foundation::IInspectable const& sender,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            auto field = sender.try_as<muxc::TextBox>();
+            if (state && state->metadataEditing && field) {
+                state->metadataFocusedEditor = winrt::make_weak(field);
+            }
+        });
+    editor.LostFocus(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                state->metadataFocusedEditor = {};
+            }
+        });
+    row.Children().Append(editor);
+    panel.Children().Append(row);
+    return editor;
+}
+
 winrt::fire_and_forget BetterPanelLoadExif(
     std::weak_ptr<BetterPanelState> weakState,
     std::wstring path) {
@@ -5826,6 +6259,11 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
                                     ? Visibility::Visible
                                     : Visibility::Collapsed);
     }
+    if (auto metadataCard = state->metadataCard.get()) {
+        metadataCard.Visibility(isAudio && !isMultiSelection
+                                    ? Visibility::Visible
+                                    : Visibility::Collapsed);
+    }
     if (auto copyUtility = state->detailsCopyUtility.get()) {
         copyUtility.Visibility((isMultiSelection || !path.empty()) &&
                                        !state->insightsCollapsed
@@ -5856,6 +6294,15 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         state->insightsLoading = false;
         state->insightsLoadedPath.clear();
         state->hashValue.clear();
+        state->metadataLoading = false;
+        state->metadataEditing = false;
+        state->metadataDirty = false;
+        state->metadataLoadedPath.clear();
+        state->metadataCopyText.clear();
+        state->metadataFocusedEditor = {};
+        state->metadataOriginal = {};
+        BetterPanelSetMetadataFields(state, {});
+        BetterPanelUpdateMetadataControls(state);
         state->archivePreviewLoading = false;
         state->archivePreviewPath.clear();
         state->pdfLoading = false;
@@ -5900,6 +6347,8 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
         if (isAudio) {
             BetterPanelLoadArtwork(state, path);
+            BetterPanelLoadAudioMetadata(
+                std::weak_ptr<BetterPanelState>(state), path);
         }
         if (!path.empty() && !isMultiSelection) {
             BetterPanelLoadFileIcon(state, path);
@@ -7323,6 +7772,183 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     insightsShell.Children().Append(propertiesButton);
     insightsCard.Child(insightsShell);
     panel.Children().Append(insightsCard);
+
+    muxc::Border metadataCard;
+    metadataCard.Name(L"BetterDetailPanelMetadataCard");
+    metadataCard.Padding(Thickness{10, 8, 10, 10});
+    metadataCard.CornerRadius(CornerRadius{8});
+    metadataCard.Visibility(Visibility::Collapsed);
+    metadataCard.HorizontalAlignment(HorizontalAlignment::Stretch);
+    state->metadataCard =
+        winrt::make_weak(metadataCard.as<FrameworkElement>());
+
+    muxc::StackPanel metadataShell;
+    metadataShell.Spacing(6);
+
+    muxc::Grid metadataHeader;
+    muxc::ColumnDefinition metadataTitleColumn;
+    metadataTitleColumn.Width(GridLength{1, GridUnitType::Star});
+    muxc::ColumnDefinition metadataCopyColumn;
+    metadataCopyColumn.Width(GridLength{1, GridUnitType::Auto});
+    metadataHeader.ColumnDefinitions().Append(metadataTitleColumn);
+    metadataHeader.ColumnDefinitions().Append(metadataCopyColumn);
+
+    auto metadataToggle = BetterPanelMakeButton(L"Metadata  ▾");
+    metadataToggle.FontWeight(
+        winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+    metadataToggle.HorizontalContentAlignment(HorizontalAlignment::Left);
+    metadataToggle.HorizontalAlignment(HorizontalAlignment::Stretch);
+    metadataToggle.Padding(Thickness{6, 4, 6, 4});
+    state->metadataToggleButton = winrt::make_weak(metadataToggle);
+    metadataHeader.Children().Append(metadataToggle);
+
+    auto copyMetadataButton = BetterPanelMakeButton(L"");
+    muxc::FontIcon copyMetadataIcon;
+    copyMetadataIcon.Glyph(L"\uE8C8");
+    copyMetadataIcon.FontSize(13);
+    copyMetadataButton.Content(copyMetadataIcon);
+    copyMetadataButton.Width(32);
+    copyMetadataButton.Height(32);
+    copyMetadataButton.Padding(Thickness{0, 0, 0, 0});
+    copyMetadataButton.Margin(Thickness{6, 0, 0, 0});
+    muxc::Grid::SetColumn(copyMetadataButton, 1);
+    muxa::AutomationProperties::SetName(copyMetadataButton,
+                                        L"Copy all metadata");
+    muxc::ToolTipService::SetToolTip(copyMetadataButton,
+                                    winrt::box_value(L"Copy all metadata"));
+    copyMetadataButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state) return;
+            std::wstring text = state->metadataEditing
+                                    ? BetterPanelFormatMetadata(
+                                          BetterPanelCurrentMetadata(state))
+                                    : state->metadataCopyText;
+            BetterPanelSetStatus(
+                state->status,
+                !text.empty() && BetterPanelCopyText(text)
+                    ? L"All metadata copied"
+                    : L"Metadata is still loading");
+        });
+    metadataHeader.Children().Append(copyMetadataButton);
+    metadataShell.Children().Append(metadataHeader);
+
+    muxc::StackPanel metadataContent;
+    metadataContent.Spacing(5);
+    state->metadataContent = winrt::make_weak(metadataContent);
+
+    auto metadataTitle = BetterPanelAddMetadataField(
+        metadataContent, L"Title", L"Song title", false, weakState);
+    state->metadataTitle = winrt::make_weak(metadataTitle);
+    auto metadataArtist = BetterPanelAddMetadataField(
+        metadataContent, L"Artist", L"Artist", false, weakState);
+    state->metadataArtist = winrt::make_weak(metadataArtist);
+    auto metadataAlbum = BetterPanelAddMetadataField(
+        metadataContent, L"Album", L"Album", false, weakState);
+    state->metadataAlbum = winrt::make_weak(metadataAlbum);
+    auto metadataGenre = BetterPanelAddMetadataField(
+        metadataContent, L"Genre", L"Genre, separated by commas", false,
+        weakState);
+    state->metadataGenre = winrt::make_weak(metadataGenre);
+    auto metadataYear = BetterPanelAddMetadataField(
+        metadataContent, L"Year", L"Year", false, weakState);
+    state->metadataYear = winrt::make_weak(metadataYear);
+    auto metadataRating = BetterPanelAddMetadataField(
+        metadataContent, L"Rating", L"0–5", false, weakState);
+    state->metadataRating = winrt::make_weak(metadataRating);
+    auto metadataTags = BetterPanelAddMetadataField(
+        metadataContent, L"Tags", L"Tags, separated by commas", false,
+        weakState);
+    state->metadataTags = winrt::make_weak(metadataTags);
+    auto metadataComments = BetterPanelAddMetadataField(
+        metadataContent, L"Comments", L"Comments", true, weakState);
+    state->metadataComments = winrt::make_weak(metadataComments);
+
+    muxc::TextBlock metadataInfo;
+    metadataInfo.Text(L"Reading metadata…");
+    metadataInfo.FontSize(11);
+    metadataInfo.Opacity(0.72);
+    metadataInfo.TextWrapping(TextWrapping::Wrap);
+    metadataInfo.Margin(Thickness{0, 2, 0, 2});
+    state->metadataInfo = winrt::make_weak(metadataInfo);
+    metadataContent.Children().Append(metadataInfo);
+
+    auto metadataActions = BetterPanelMakeRow();
+    metadataActions.HorizontalAlignment(HorizontalAlignment::Left);
+
+    auto metadataEditButton =
+        BetterPanelMakeIconButton(L"Edit", L"\uE70F");
+    metadataEditButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelBeginMetadataEdit(state);
+            }
+        });
+    state->metadataEditButton = winrt::make_weak(metadataEditButton);
+    metadataActions.Children().Append(metadataEditButton);
+
+    auto metadataSaveButton =
+        BetterPanelMakeIconButton(L"Save", L"\uE74E");
+    metadataSaveButton.Visibility(Visibility::Collapsed);
+    metadataSaveButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            BetterPanelSaveAudioMetadata(weakState);
+        });
+    state->metadataSaveButton = winrt::make_weak(metadataSaveButton);
+    metadataActions.Children().Append(metadataSaveButton);
+
+    auto metadataCancelButton = BetterPanelMakeButton(L"Cancel");
+    metadataCancelButton.Visibility(Visibility::Collapsed);
+    metadataCancelButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelCancelMetadataEdit(state);
+            }
+        });
+    state->metadataCancelButton = winrt::make_weak(metadataCancelButton);
+    metadataActions.Children().Append(metadataCancelButton);
+
+    auto metadataReloadButton =
+        BetterPanelMakeIconButton(L"Reload", L"\uE72C");
+    metadataReloadButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state || state->metadataEditing ||
+                !BetterPanelIsAudioFile(state->selectedPath)) {
+                return;
+            }
+            BetterPanelLoadAudioMetadata(weakState, state->selectedPath);
+        });
+    state->metadataReloadButton = winrt::make_weak(metadataReloadButton);
+    metadataActions.Children().Append(metadataReloadButton);
+    metadataContent.Children().Append(metadataActions);
+    metadataShell.Children().Append(metadataContent);
+
+    metadataToggle.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state) return;
+            state->metadataCollapsed = !state->metadataCollapsed;
+            if (auto content = state->metadataContent.get()) {
+                content.Visibility(state->metadataCollapsed
+                                       ? Visibility::Collapsed
+                                       : Visibility::Visible);
+            }
+            if (auto button = state->metadataToggleButton.get()) {
+                button.Content(winrt::box_value(state->metadataCollapsed
+                                                    ? L"Metadata  ▸"
+                                                    : L"Metadata  ▾"));
+            }
+        });
+
+    metadataCard.Child(metadataShell);
+    panel.Children().Append(metadataCard);
 
     panel.Children().Append(transferRow);
     panel.Children().Append(multiActionRow);

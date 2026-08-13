@@ -54,6 +54,8 @@ region, or closing the recorder before using these Better Panel features.
   preservation, external-change detection, and safe size limits.
 - Audio playback with artwork, play/pause, previous/next file, playback speed,
   repeat, shuffle, timeline, volume, mute, and elapsed/total time.
+- Editable audio metadata for title, artist, album, genre, year, rating, tags,
+  and comments, with Save, Cancel, Reload, and Copy All controls.
 - Compact audio filename and play/pause controls remain available when the full
   media preview is hidden.
 - Video playback with responsive sizing and compact auto-hiding controls.
@@ -75,7 +77,8 @@ region, or closing the recorder before using these Better Panel features.
 Playback depends on codecs available to Windows. Print appears only when the
 selected file type has a print handler registered in Windows. Archive choices
 depend on the archive applications and shell integrations installed on the
-computer.
+computer. Metadata editing depends on the audio format's Windows property
+handler; some formats may expose only part of the metadata or be read-only.
 
 ## Installation
 

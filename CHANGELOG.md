@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.14.0
+
+- Added editable audio metadata for title, artist, album, genre, year, rating,
+  tags, and comments.
+- Added Metadata Edit, Save, Cancel, Reload, and Copy All controls.
+
 ## 1.13.2
 
 - Fixed Backspace navigating Explorer while editing text. Explorer consumed the
