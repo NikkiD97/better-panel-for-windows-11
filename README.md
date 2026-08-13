@@ -19,6 +19,11 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
+> **Version 1.15.10 is a major recode.** Panel updates, folder analysis, Home
+> navigation, and drive handling were substantially rewritten to reduce system
+> resource use and improve responsiveness. New bugs may still be present while
+> this release receives broader testing.
+
 ## Known bug: screen recording and resource-heavy previews
 
 Screen-recording or capture software that uses GPU hardware acceleration,
@@ -41,6 +46,13 @@ region, or closing the recorder before using these Better Panel features.
 
 ## Features
 
+- Middle-click a folder to request Explorer's native **Open in new tab** action.
+- A custom Home panel with drives, capacity bars, available space, and recent
+  folders that navigate in the active Explorer tab.
+- Drive shortcuts, storage statistics, volume and filesystem information, Disk
+  Cleanup, Optimize Drives, and Windows Storage controls.
+- Folder and multiple-selection analysis with size, file and subfolder counts,
+  file types, and modified-date summaries.
 - Native-looking Share, Open, and Open with controls.
 - File-type icons, one clean title row, and pencil-button inline renaming.
 - Responsive image previews and animated GIF playback.
@@ -79,6 +91,19 @@ selected file type has a print handler registered in Windows. Archive choices
 depend on the archive applications and shell integrations installed on the
 computer. Metadata editing depends on the audio format's Windows property
 handler; some formats may expose only part of the metadata or be read-only.
+
+## Known limitations
+
+- Middle-click depends on Explorer's native **Open in new tab** command. Some
+  virtual folders, protected locations, special shell items, and third-party
+  folder types may open in a new window or may not respond.
+- Explorer can create its native empty-selection banner after Better Panel
+  loads, so the banner can remain visible for approximately one second before
+  it is removed.
+- Folder totals can exclude inaccessible, protected, offline, cloud-only, or
+  unsupported reparse-point contents.
+- Analysis of very large folder selections is intentionally limited to protect
+  Explorer responsiveness, and the displayed totals may therefore be partial.
 
 ## Installation
 

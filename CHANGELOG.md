@@ -1,5 +1,67 @@
 # Changelog
 
+## 1.15.10
+
+> **Major recode:** This release substantially rewrites panel updates, folder
+> analysis, Home navigation, and drive handling to reduce system-resource use
+> and improve responsiveness. New bugs may still be present while the revised
+> behavior receives broader testing.
+
+### Added
+
+- Added middle-click folder navigation to open folders in a new Explorer tab.
+- Added a custom Home panel with devices, drives, capacity bars, available
+  space, and recently visited folders.
+- Added direct navigation between available drives from the Details pane.
+- Added drive used space, free space, capacity, volume label, file system,
+  drive type, and serial number information.
+- Added Disk Cleanup, Optimize Drives, and Windows Storage controls.
+- Added folder size, file count, subfolder count, and file-type analysis.
+- Added multiple-selection item, file, folder, contained-file, subfolder,
+  combined-size, file-type, and modified-date summaries.
+
+### Changed
+
+- Replaced frequent polling with event-driven selection and navigation updates.
+- Improved response times when selecting files, changing folders, switching
+  tabs, and navigating between drives.
+- Made drive-capacity reporting instant instead of scanning the entire drive.
+- Added limits and caching for large folder and multiple-selection analysis to
+  protect Explorer responsiveness.
+- Made the drive panel more compact and reduced spacing between the preview eye
+  button and drive shortcuts.
+- Removed unnecessary Share, Open, Open with, rename, and native information
+  elements from drive views.
+
+### Fixed
+
+- Fixed folder sizes being reported before analysis completed.
+- Fixed inaccurate folder-size totals.
+- Fixed multiple-folder selections sometimes showing zero information.
+- Fixed Explorer crashing when navigating or opening a tab during a large
+  folder scan.
+- Fixed delays when navigating from Home to a drive or folder.
+- Fixed Home sometimes displaying an empty panel.
+- Fixed Home shortcuts opening separate windows instead of using the active tab.
+- Fixed stale Home content remaining after leaving Home.
+- Fixed the native empty-selection text, icon, and outlined box appearing in
+  drive views.
+- Fixed excessive spacing above drive shortcuts.
+
+### Known limitations
+
+- Middle-click relies on Explorer's native **Open in new tab** command. Some
+  virtual folders, protected locations, special shell items, and third-party
+  folder types may open in a new window or may not respond. Broader support is
+  planned for a future update.
+- Explorer can create its native empty-selection banner after Better Panel
+  loads. The banner may remain visible for approximately one second before it
+  is removed.
+- Folder totals may exclude inaccessible, protected, offline, cloud-only, or
+  unsupported reparse-point contents.
+- Very large folder selections are intentionally limited to prevent Explorer
+  freezes or crashes, so their displayed totals may be partial.
+
 ## 1.14.0
 
 - Added editable audio metadata for title, artist, album, genre, year, rating,
