@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/68288c1d-87c2-416f-ae1b-c3a8075222aa
+
 # Better Panel for Windows 11
 
 Better Panel for Windows 11 is a Windhawk mod that turns File Explorer's modern
