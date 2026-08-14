@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         1.15.10
+// @version         1.15.22
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -1483,6 +1483,8 @@ void ApplyCustomizations(InstanceHandle handle,
                          winrt::Microsoft::UI::Xaml::FrameworkElement element,
                          PCWSTR fallbackClassName);
 void CleanupCustomizations(InstanceHandle handle);
+void BetterPanelSuppressNativeElementOnAdd(
+    winrt::Microsoft::UI::Xaml::FrameworkElement const& element);
 
 HMODULE GetCurrentModuleHandle() {
     HMODULE module;
@@ -1631,6 +1633,7 @@ HRESULT VisualTreeWatcher::OnVisualTreeChange(ParentChildRelation, VisualElement
         if (frameworkElement)
         {
             Wh_Log(L"FrameworkElement name: %s", frameworkElement.Name().c_str());
+            BetterPanelSuppressNativeElementOnAdd(frameworkElement);
             ApplyCustomizations(element.Handle, frameworkElement, element.Type);
         }
         else
@@ -2469,6 +2472,8 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> detailsCopyUtility;
     winrt::weak_ref<FrameworkElement> nativeDetailsSection;
     Visibility nativeDetailsVisibility = Visibility::Visible;
+    winrt::weak_ref<FrameworkElement> nativeDetailsVisibilityHook;
+    int64_t nativeDetailsVisibilityToken = 0;
     winrt::weak_ref<FrameworkElement> nativeInfoBanner;
     Visibility nativeInfoBannerVisibility = Visibility::Visible;
     winrt::weak_ref<FrameworkElement> insightsCard;
@@ -6662,6 +6667,69 @@ FrameworkElement BetterPanelFindNativeDetailsSection(
     return nullptr;
 }
 
+bool BetterPanelIsInsideCustomRoot(FrameworkElement const& element) {
+    DependencyObject current = element;
+    for (int level = 0; level < 64 && current; ++level) {
+        if (auto currentElement = current.try_as<FrameworkElement>();
+            currentElement &&
+            currentElement.Name() == L"BetterDetailPanelRoot") {
+            return true;
+        }
+        current = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
+            GetParent(current);
+    }
+    return false;
+}
+
+void BetterPanelSuppressNativeElementOnAdd(
+    FrameworkElement const& element) {
+    if (!element || BetterPanelIsInsideCustomRoot(element)) return;
+
+    try {
+        if (muxa::AutomationProperties::GetName(element) == L"Details") {
+            // OnVisualTreeChange(Add) runs as Explorer inserts the element,
+            // before it can survive to a later BetterPanelRefresh frame.
+            element.Visibility(Visibility::Collapsed);
+            return;
+        }
+    } catch (...) {
+    }
+
+    auto text = element.try_as<muxc::TextBlock>();
+    if (!text || std::wstring(text.Text()).find(
+                     L"Select a single file to get more information") ==
+                     std::wstring::npos) {
+        return;
+    }
+
+    auto weakMarker = winrt::make_weak(element);
+    element.Loaded([weakMarker](auto const&, RoutedEventArgs const&) {
+        auto marker = weakMarker.get();
+        if (!marker || BetterPanelIsInsideCustomRoot(marker)) return;
+
+        FrameworkElement banner = nullptr;
+        DependencyObject current = marker;
+        for (int level = 0; level < 8 && current; ++level) {
+            if (auto candidate = current.try_as<FrameworkElement>();
+                candidate && candidate.ActualWidth() > 180 &&
+                candidate.ActualHeight() >= 30 &&
+                candidate.ActualHeight() <= 100) {
+                banner = candidate;
+            }
+            auto parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
+                GetParent(current);
+            if (auto parentElement = parent.try_as<FrameworkElement>();
+                parentElement &&
+                (parentElement.Name() == L"DetailsViewThumbnail" ||
+                 parentElement.Name() == L"BetterDetailPanelRoot")) {
+                break;
+            }
+            current = parent;
+        }
+        if (banner) banner.Visibility(Visibility::Collapsed);
+    });
+}
+
 void BetterPanelFindNativeInfoBannerCandidate(
     DependencyObject const& root,
     std::vector<DependencyObject> const& hostAncestors,
@@ -6909,25 +6977,72 @@ void BetterPanelHandleMiddleClick(MSG const* message) {
     ShellExecuteExW(&executeInfo);
 }
 
+void BetterPanelUnwatchNativeDetailsVisibility(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state || !state->nativeDetailsVisibilityToken) return;
+    if (auto hooked = state->nativeDetailsVisibilityHook.get()) {
+        try {
+            hooked.UnregisterPropertyChangedCallback(
+                UIElement::VisibilityProperty(),
+                state->nativeDetailsVisibilityToken);
+        } catch (...) {
+        }
+    }
+    state->nativeDetailsVisibilityHook = {};
+    state->nativeDetailsVisibilityToken = 0;
+}
+
+void BetterPanelWatchNativeDetailsVisibility(
+    std::shared_ptr<BetterPanelState> const& state,
+    FrameworkElement const& section) {
+    if (!state || !section) return;
+    if (state->nativeDetailsVisibilityHook.get() == section &&
+        state->nativeDetailsVisibilityToken) {
+        return;
+    }
+
+    BetterPanelUnwatchNativeDetailsVisibility(state);
+    std::weak_ptr<BetterPanelState> weakState = state;
+    auto weakSection = winrt::make_weak(section);
+    state->nativeDetailsVisibilityToken =
+        section.RegisterPropertyChangedCallback(
+            UIElement::VisibilityProperty(),
+            [weakState, weakSection](DependencyObject const&,
+                                     DependencyProperty const&) {
+                auto currentState = weakState.lock();
+                auto currentSection = weakSection.get();
+                if (!currentState || currentState->unloaded ||
+                    !currentSection) {
+                    return;
+                }
+                if (currentSection.Visibility() != Visibility::Collapsed) {
+                    currentSection.Visibility(Visibility::Collapsed);
+                }
+            });
+    state->nativeDetailsVisibilityHook = weakSection;
+}
+
 void BetterPanelHideNativeDetails(
     std::shared_ptr<BetterPanelState> const& state) {
     auto section = state->nativeDetailsSection.get();
-    if (!section) {
-        ULONGLONG now = GetTickCount64();
-        if (state->nativeDetailsLastSearchTick != 0 &&
-            now - state->nativeDetailsLastSearchTick < 1500) {
-            return;
-        }
-        state->nativeDetailsLastSearchTick = now;
-        auto host = state->host.get();
-        if (!host || !host.XamlRoot()) return;
-        section = BetterPanelFindNativeDetailsSection(host.XamlRoot().Content());
-        if (section) {
-            state->nativeDetailsSection = winrt::make_weak(section);
-            state->nativeDetailsVisibility = section.Visibility();
-        }
+    auto host = state->host.get();
+    if (!host || !host.XamlRoot()) return;
+
+    // Explorer can replace the native Details section when the selection or
+    // folder template changes. A still-valid weak reference can therefore
+    // point at the old collapsed section while the replacement flashes on
+    // screen. Resolve the current section on every real panel refresh.
+    auto currentSection =
+        BetterPanelFindNativeDetailsSection(host.XamlRoot().Content());
+    if (currentSection && currentSection != section) {
+        section = currentSection;
+        state->nativeDetailsSection = winrt::make_weak(section);
+        state->nativeDetailsVisibility = section.Visibility();
     }
-    if (section) section.Visibility(Visibility::Collapsed);
+    if (section) {
+        BetterPanelWatchNativeDetailsVisibility(state, section);
+        section.Visibility(Visibility::Collapsed);
+    }
 }
 
 void BetterPanelEnsureShareActions(
@@ -7325,24 +7440,19 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     }
 
     auto nativeInfoBanner = state->nativeInfoBanner.get();
-    if (!nativeInfoBanner) {
-        if (auto host = state->host.get(); host && host.XamlRoot()) {
-            // The notice is a sibling of the details host on current Explorer
-            // builds, so search the XAML root and accept visible candidates.
-            nativeInfoBanner = BetterPanelFindNativeInfoBanner(
-                host.XamlRoot().Content(), host);
-            if (nativeInfoBanner) {
-                state->nativeInfoBanner = winrt::make_weak(nativeInfoBanner);
-                state->nativeInfoBannerVisibility =
-                    nativeInfoBanner.Visibility();
-            }
+    if (auto host = state->host.get(); host && host.XamlRoot()) {
+        // Explorer can also replace or re-show this notice between selections.
+        auto currentBanner = BetterPanelFindNativeInfoBanner(
+            host.XamlRoot().Content(), host);
+        if (currentBanner && currentBanner != nativeInfoBanner) {
+            nativeInfoBanner = currentBanner;
+            state->nativeInfoBanner = winrt::make_weak(nativeInfoBanner);
+            state->nativeInfoBannerVisibility = nativeInfoBanner.Visibility();
         }
     }
     if (nativeInfoBanner) {
-        BetterPanelSetVisibilityIfChanged(
-            nativeInfoBanner,
-            isDriveRoot ? Visibility::Collapsed
-                        : state->nativeInfoBannerVisibility);
+        BetterPanelSetVisibilityIfChanged(nativeInfoBanner,
+                                          Visibility::Collapsed);
     }
 
     bool needsMediaTimer = isAudio && !isMultiSelection;
@@ -9312,6 +9422,7 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
                 state->videoControlsTimer.Stop();
             }
             BetterPanelStopStateMedia(state);
+            BetterPanelUnwatchNativeDetailsVisibility(state);
 
             std::lock_guard lock(g_betterPanelMutex);
             std::erase_if(g_betterPanels,
@@ -9379,6 +9490,7 @@ void RemoveBetterDetailPanelsForCurrentThread() {
                 state->nativeShareIndex, shareParent.Children().Size());
             shareParent.Children().InsertAt(restoreIndex, share);
         }
+        BetterPanelUnwatchNativeDetailsVisibility(state);
         if (auto nativeDetails = state->nativeDetailsSection.get()) {
             nativeDetails.Visibility(state->nativeDetailsVisibility);
         }

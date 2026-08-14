@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.15.22
+
+> **Stability recovery:** The major v1.15.10 recode exposed timing instability
+> between Better Panel and Explorer's native details UI. This release preserves
+> the working v1.15.10 feature set while correcting that native XAML race.
+
+### Changed
+
+- Native Explorer details elements are now suppressed when they are added to
+  the XAML visual tree instead of waiting for a later panel refresh.
+- The native Details section is now guarded with a visibility-change callback
+  so Explorer cannot briefly restore it during file, folder, or tab changes.
+- Native-element watchers are removed safely when the panel or mod unloads.
+
+### Fixed
+
+- Fixed Explorer's old Details section appearing briefly before Better Panel's
+  replacement Details section.
+- Fixed the native "Select a single file" information banner appearing on
+  single-file and drive views.
+- Fixed replacement native Details elements escaping suppression after
+  Explorer rebuilt part of the details-pane visual tree.
+
 ## 1.15.10
 
 > **Major recode:** This release substantially rewrites panel updates, folder

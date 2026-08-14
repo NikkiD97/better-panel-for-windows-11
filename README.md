@@ -19,10 +19,11 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
-> **Version 1.15.10 is a major recode.** Panel updates, folder analysis, Home
-> navigation, and drive handling were substantially rewritten to reduce system
-> resource use and improve responsiveness. New bugs may still be present while
-> this release receives broader testing.
+> **Version 1.15.22 is a stability recovery following the major v1.15.10
+> recode.** It retains the resource and responsiveness improvements while
+> correcting timing instability between Better Panel and Explorer's native
+> details UI. New bugs may still be present while the revised behavior receives
+> broader testing.
 
 ## Known bug: screen recording and resource-heavy previews
 
@@ -97,9 +98,6 @@ handler; some formats may expose only part of the metadata or be read-only.
 - Middle-click depends on Explorer's native **Open in new tab** command. Some
   virtual folders, protected locations, special shell items, and third-party
   folder types may open in a new window or may not respond.
-- Explorer can create its native empty-selection banner after Better Panel
-  loads, so the banner can remain visible for approximately one second before
-  it is removed.
 - Folder totals can exclude inaccessible, protected, offline, cloud-only, or
   unsupported reparse-point contents.
 - Analysis of very large folder selections is intentionally limited to protect
