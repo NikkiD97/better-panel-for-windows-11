@@ -29,26 +29,6 @@ those elements and require a mod update even on an otherwise compatible release.
 > details UI. New bugs may still be present while the revised behavior receives
 > broader testing.
 
-## Known bug: screen recording and resource-heavy previews
-
-Screen-recording or capture software that uses GPU hardware acceleration,
-hardware video encoding, overlays, or system-audio capture may conflict with
-Explorer while Better Panel is performing resource-heavy preview or file
-operations. This has been observed mainly when viewing PDFs, playing video, or
-working with archives; audio previews may also be affected. Symptoms can include
-playback glitches, missing frames, slow interface updates, failed operations, or
-Explorer instability even when the same actions work normally without the
-recorder running.
-
-Windows and File Explorer should otherwise continue running normally while a
-recorder and Better Panel are active. The problem is most likely to appear when
-opening PDFs, playing media, previewing archive contents, or extracting and
-creating archives during an active recording.
-
-If this occurs, try disabling hardware acceleration or system-audio capture in
-the recorder, lowering its resolution or frame rate, recording only a selected
-region, or closing the recorder before using these Better Panel features.
-
 ## Features
 
 - Middle-click a folder to request Explorer's native **Open in new tab** action.
@@ -102,10 +82,6 @@ handler; some formats may expose only part of the metadata or be read-only.
 - Middle-click depends on Explorer's native **Open in new tab** command. Some
   virtual folders, protected locations, special shell items, and third-party
   folder types may open in a new window or may not respond.
-- Folder totals can exclude inaccessible, protected, offline, cloud-only, or
-  unsupported reparse-point contents.
-- Analysis of very large folder selections is intentionally limited to protect
-  Explorer responsiveness, and the displayed totals may therefore be partial.
 
 ## Installation
 
