@@ -24,76 +24,95 @@ Better Panel for Windows 11 is a Windhawk mod that turns File Explorer’s basic
 
 Better Panel includes a compatibility setting that can alert you, block the competing consumer, or allow it to take over. Allowing another consumer to take over may stop Better Panel from working.
 
-Features
-File Explorer and navigation
-Middle-click folders to open them in a new Explorer tab.
-Custom Home panel with drives, capacity bars, available space, and recently visited folders.
-Navigate between available drives directly from the Details pane.
-Native-looking Share, Open, and Open with buttons.
-File-type icons, a cleaner title row, and pencil-button inline renaming.
-Compact preview show and hide control.
-Drive information and tools
-Used, free, and total drive space.
-Drive capacity bars.
-Volume label, filesystem, drive type, and serial number.
-Quick access to Disk Cleanup, Optimize Drives, and Windows Storage settings.
-Folder and multiple-selection details
-Folder size.
-File and subfolder counts.
-File-type totals.
-Combined size of selected files and folders.
-Earliest and latest modified dates.
-Native Move to, recycle-aware Delete, and Archive actions for multiple selections.
-Images and GIFs
-Responsive image previews.
-Animated GIF playback.
-Image dimensions and supported EXIF information.
-Camera details, date taken, rating, and GPS coordinates when available.
-PDF previews and printing
-Inline PDF viewing.
-Page navigation and page counts.
-Smooth scrolling.
-Sharp re-rendered zoom from 50% to 250%.
-Printing for PDFs, text, images, and other supported file types.
-Text and code files
-Preview and edit TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV, scripts, configuration files, and common source-code formats.
-Edit, Save, Cancel, and Reload controls.
-Encoding and line-ending preservation.
-External file-change detection.
-Safe preview and editing size limits.
-Audio playback and metadata
-Album artwork.
-Play, pause, previous file, and next file controls.
-Playback speed, repeat, and shuffle.
-Timeline with elapsed and total time.
-Volume and mute controls.
-Compact filename and playback controls when the full preview is hidden.
-Edit title, artist, album, genre, year, rating, tags, and comments.
-Save, Cancel, Reload, and Copy All metadata controls.
-Video playback
-Responsive video sizing.
-Compact auto-hiding playback controls.
-Automatic playback cleanup when the selection changes or Explorer closes.
-Archive tools
-Preview the contents of ZIP, RAR, and 7Z archives before extraction.
-Extract archives using Windows, WinRAR, 7-Zip, or WinZip-compatible tools.
-Extract here, Extract to..., and Extract to “archive-name\” options.
-Extract archives into any open Explorer folder or selected destination subfolder.
-File details
-Copy individual values for name, full path, size, modified date, and SHA-256.
-Copy all core file details with one button.
-Feature requirements
+## Features
 
+### File Explorer and navigation
+
+- Middle-click folders to open them in a new Explorer tab.
+- Custom Home panel with drives, capacity bars, available space, and recently visited folders.
+- Navigate between available drives directly from the Details pane.
+- Native-looking **Share**, **Open**, and **Open with** buttons.
+- File-type icons, a cleaner title row, and pencil-button inline renaming.
+- Compact preview show and hide control.
+
+### Drive information and tools
+
+- Used, free, and total drive space.
+- Drive capacity bars.
+- Volume label, filesystem, drive type, and serial number.
+- Quick access to **Disk Cleanup**, **Optimize Drives**, and **Windows Storage** settings.
+
+### Folder and multiple-selection details
+
+- Folder size.
+- File and subfolder counts.
+- File-type totals.
+- Combined size of selected files and folders.
+- Earliest and latest modified dates.
+- Native **Move to**, recycle-aware **Delete**, and **Archive** actions for multiple selections.
+
+### Images and GIFs
+
+- Responsive image previews.
+- Animated GIF playback.
+- Image dimensions and supported EXIF information.
+- Camera details, date taken, rating, and GPS coordinates when available.
+
+### PDF previews and printing
+
+- Inline PDF viewing.
+- Page navigation and page counts.
+- Smooth scrolling.
+- Sharp re-rendered zoom from 50% to 250%.
+- Printing for PDFs, text, images, and other supported file types.
+
+### Text and code files
+
+- Preview and edit TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV, scripts, configuration files, and common source-code formats.
+- **Edit**, **Save**, **Cancel**, and **Reload** controls.
+- Encoding and line-ending preservation.
+- External file-change detection.
+- Safe preview and editing size limits.
+
+### Audio playback and metadata
+
+- Album artwork.
+- Play, pause, previous file, and next file controls.
+- Playback speed, repeat, and shuffle.
+- Timeline with elapsed and total time.
+- Volume and mute controls.
+- Compact filename and playback controls when the full preview is hidden.
+- Edit title, artist, album, genre, year, rating, tags, and comments.
+- **Save**, **Cancel**, **Reload**, and **Copy All** metadata controls.
+
+### Video playback
+
+- Responsive video sizing.
+- Compact auto-hiding playback controls.
+- Automatic playback cleanup when the selection changes or Explorer closes.
+
+### Archive tools
+
+- Preview the contents of ZIP, RAR, and 7Z archives before extraction.
+- Extract archives using Windows, WinRAR, 7-Zip, or WinZip-compatible tools.
+- **Extract here**, **Extract to...**, and **Extract to “archive-name\”** options.
+- Extract archives into any open Explorer folder or selected destination subfolder.
+
+### File details
+
+- Copy individual values for name, full path, size, modified date, and SHA-256.
+- Copy all core file details with one button.
+
+## Feature requirements
 > [!NOTE]
-
-Media playback depends on the codecs installed in Windows.
-The Print button only appears when Windows has a print action registered for the selected file type.
-Archive options depend on the archive applications and shell integrations installed on the computer.
-Audio metadata editing depends on the format’s Windows property handler. Some formats may expose only limited information or may be read-only.
-Known limitations
-Middle-click uses Explorer’s native Open in new tab command. Some virtual folders, protected locations, special shell items, and third-party folder types may open in a new window or may not respond.
-Installation
-Install from the Windhawk catalog
+> Media playback depends on the codecs installed in Windows.
+> The Print button only appears when Windows has a print action registered for the selected file type.
+> Archive options depend on the archive applications and shell integrations installed on the computer.
+> Audio metadata editing depends on the format’s Windows property handler. Some formats may expose only limited information or may be read-only.
+> Known limitations
+> Middle-click uses Explorer’s native Open in new tab command. Some virtual folders, protected locations, special shell items, and third-party folder types may open in a new window or may not respond.
+> Installation
+> Install from the Windhawk catalog
 
 Once Better Panel is accepted into the official Windhawk catalog:
 
