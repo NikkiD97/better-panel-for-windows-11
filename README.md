@@ -23,11 +23,12 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
-> **Version 1.15.22 is a stability recovery following the major v1.15.10
-> recode.** It retains the resource and responsiveness improvements while
-> correcting timing instability between Better Panel and Explorer's native
-> details UI. New bugs may still be present while the revised behavior receives
-> broader testing.
+## Important conflict warning
+
+Explorer permits only one XAML diagnostics consumer at a time. Do not enable
+Better Panel together with another File Explorer mod that uses XAML diagnostics.
+The mod includes a compatibility setting that can alert, block, or allow a
+competing diagnostics consumer but does not guarantee it will run.
 
 ## Features
 
@@ -101,13 +102,6 @@ Once the mod is accepted into the official Windhawk catalog, search for
 
 Windhawk's official guide explains the local mod format and editor workflow:
 [Creating a new mod](https://github.com/ramensoftware/windhawk/wiki/Creating-a-new-mod).
-
-## Important conflict warning
-
-Explorer permits only one XAML diagnostics consumer at a time. Do not enable
-Better Panel together with another File Explorer mod that uses XAML diagnostics.
-The mod includes a compatibility setting that can alert, block, or allow a
-competing diagnostics consumer.
 
 ## Reporting a problem
 
