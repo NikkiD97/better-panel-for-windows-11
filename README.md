@@ -3,15 +3,16 @@ https://github.com/user-attachments/assets/68288c1d-87c2-416f-ae1b-c3a8075222aa
 Better Panel for Windows 11
 
 Better Panel for Windows 11 is a Windhawk mod that turns File Explorer’s basic Details pane into a full preview and file-action panel. It adds media playback, responsive previews, archive tools, file information, inline editing, and cross-tab file operations while staying close to Windows 11’s native appearance.
+## ⚠️ Compatibility
 
-⚠️ Compatibility
-Windows version	Architecture	Status
-Windows 11 25H2, build 26200.8875	x64	✅ Confirmed working
-Windows 11 24H2	x64	⚠️ Expected to work, but not directly tested
-Earlier Windows 11 releases	x64	❔ Untested
-Windows 11 26H1	x64	❔ Untested
-Windows 11	ARM64	❌ Not supported
-Windows 10	x64 or ARM64	❌ Not supported
+| Windows version                   | Architecture | Status                                       |
+| --------------------------------- | -----------: | -------------------------------------------- |
+| Windows 11 25H2, build 26200.8875 |          x64 | ✅ Confirmed working                          |
+| Windows 11 24H2                   |          x64 | ⚠️ Expected to work, but not directly tested |
+| Earlier Windows 11 releases       |          x64 | ❔ Untested                                   |
+| Windows 11 26H1                   |          x64 | ❔ Untested                                   |
+| Windows 11                        |        ARM64 | ❌ Not supported                              |
+| Windows 10                        | x64 or ARM64 | ❌ Not supported                              |
 
 [!WARNING]
 Better Panel uses private Explorer WinUI elements. Windows updates may change these elements and require an update to the mod, even on an otherwise supported Windows version.
