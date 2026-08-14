@@ -14,13 +14,13 @@ Better Panel for Windows 11 is a Windhawk mod that turns File Explorer’s basic
 | Windows 11                        |        ARM64 | ❌ Not supported                              |
 | Windows 10                        | x64 or ARM64 | ❌ Not supported                              |
 
-[!WARNING]
-Better Panel uses private Explorer WinUI elements. Windows updates may change these elements and require an update to the mod, even on an otherwise supported Windows version.
+> [!WARNING]
+> Better Panel uses private Explorer WinUI elements. Windows updates may change these elements and require an update to the mod, even on an otherwise supported Windows version.
 
 ⚠️ XAML diagnostics conflict
 
-[!IMPORTANT]
-File Explorer only allows one XAML diagnostics consumer at a time. Do not enable Better Panel alongside another File Explorer mod that also uses XAML diagnostics.
+> [!IMPORTANT]
+> File Explorer only allows one XAML diagnostics consumer at a time. Do not enable Better Panel alongside another File Explorer mod that also uses XAML diagnostics.
 
 Better Panel includes a compatibility setting that can alert you, block the competing consumer, or allow it to take over. Allowing another consumer to take over may stop Better Panel from working.
 
@@ -84,7 +84,7 @@ Copy individual values for name, full path, size, modified date, and SHA-256.
 Copy all core file details with one button.
 Feature requirements
 
-[!NOTE]
+> [!NOTE]
 
 Media playback depends on the codecs installed in Windows.
 The Print button only appears when Windows has a print action registered for the selected file type.
