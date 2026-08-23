@@ -1,5 +1,41 @@
 # Changelog
 
+## 2.0.0-beta.1
+
+> **Beta:** The new diagnostics-free Better Details-panel integration has been
+> confirmed on the tested Windows 11 25H2 system. Other Windows builds and mod
+> combinations still need broader testing.
+
+### Notes
+
+The first start after installing or updating may take longer while Windhawk
+resolves and caches Explorer's private symbols. If the panel loads incompletely,
+allow symbol processing to finish and restart File Explorer. Restart Windows if
+the problem remains, or wait until Windhawk refreshes its cache.
+
+### Added
+
+- Added Details-pane discovery through Explorer lifecycle hooks in
+  `FileExplorerExtensions.dll`.
+- Added live WinUI visual-tree discovery anchored to the exact Explorer Details
+  pane.
+- Added direct association between each Better Panel instance and its owning
+  Explorer window and active tab.
+- Added compatibility with Windows 11 File Explorer Styler on the tested
+  Windows 11 25H2 system.
+
+### Changed
+
+- Selection changes now use Explorer's native Details-pane selection event.
+- Details-pane installation and refreshes no longer require Better Panel to
+  occupy Explorer's XAML Diagnostics connection.
+
+### Removed
+
+- Removed the requirement to disable other File Explorer mods solely because
+  they use XAML Diagnostics.
+- Removed the obsolete XAML Diagnostics compatibility setting.
+
 ## 1.15.22
 
 > **Stability recovery:** The major v1.15.10 recode exposed timing instability

@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         1.15.22
+// @version         2.0.0-beta.1
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -34,8 +34,7 @@ an interactive action area, rich previews, media playback, archive tools, and
 cross-tab file operations to the modern Windows 11 File Explorer details pane.
 
 This package has its own mod ID, source, DLL, settings, changelog, and release
-version. Do not enable it together with another File Explorer XAML diagnostics
-mod; Explorer permits only one such consumer at a time.
+version.
 
 ## WARNING: Windows compatibility
 
@@ -52,10 +51,12 @@ current build does not support ARM64 or Windows 10. Because Better Panel uses
 Explorer's private WinUI Details-pane structure, Windows updates can require
 mod changes even on an otherwise compatible Windows release.
 
-**Version 1.15.10 is a major recode.** Panel updates, folder analysis, Home
-navigation, and drive handling were substantially rewritten to reduce system
-resource use and improve responsiveness. New bugs may still be present while
-this release receives broader testing.
+**Version 2.0.0-beta.1 is a beta release.** Better Panel now discovers the
+Details pane through Explorer lifecycle hooks instead of occupying Explorer's
+single XAML Diagnostics connection. It should therefore be able to run beside
+Windows 11 File Explorer Styler. This has been confirmed on the tested Windows
+11 25H2 system, but broader Windows-build and mod-combination testing is still
+needed.
 
 ## Better Detail Panel features
 
@@ -115,6 +116,20 @@ Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 2.0.0-beta.1
+
+* Replaced Better Panel's active XAML Diagnostics connection with Explorer
+  lifecycle and selection hooks from `FileExplorerExtensions.dll`.
+* Added diagnostics-free Details-pane discovery through the live WinUI visual
+  tree.
+* Added direct association between each Better Panel instance and its owning
+  Explorer window and active tab.
+* Better Panel should now run alongside Windows 11 File Explorer Styler without
+  a XAML Diagnostics conflict warning.
+* Removed the requirement to disable other File Explorer mods solely because
+  they use XAML Diagnostics.
+* Removed the obsolete XAML Diagnostics compatibility setting.
 
 ### 1.15.10
 
@@ -224,36 +239,25 @@ settings, documentation, changelog, source, and compiled library.
 
 ## Compatibility
 
-Better Panel uses Explorer's XAML diagnostics connection to observe the modern
-Details pane. Only one XAML diagnostics consumer can be active in Explorer at a
-time, so other File Explorer XAML mods must remain disabled while Better Panel
-is enabled.
+Better Panel 2.0 no longer occupies Explorer's XAML Diagnostics connection. It
+uses Explorer lifecycle and selection hooks to locate and update the modern
+Details pane, allowing Windows 11 File Explorer Styler to remain the process's
+XAML Diagnostics consumer. Compatibility has been confirmed on the tested
+Windows 11 25H2 system and remains beta on other Windows builds.
+
+The first start after installing or updating this beta may take longer while
+Windhawk resolves and caches Explorer's private symbols. If the panel loads
+incompletely, continues showing old content, or does not react to selections,
+allow Windhawk to finish processing and restart File Explorer. Restart Windows
+if the problem remains. Manual cache deletion is not normally required and
+should be used only when directed during troubleshooting.
 
 ## Attribution
 
-Better Panel is a separate mod created by Nicole S. Its XAML diagnostics
-compatibility layer exists so Explorer functionality that needs the single
-diagnostics connection can work together without turning Better Panel into a
-theme or styling mod.
+Better Panel is a separate mod created by Nicole S. It is not a theme or styling
+mod and does not include Windows 11 File Explorer Styler.
 */
 // ==/WindhawkModReadme==
-
-
-// ==WindhawkModSettings==
-/*
-- xamlDiagnosticsHandling: alert
-  $name: XAML diagnostics compatibility
-  $description: >-
-    Explorer allows only one XAML diagnostics consumer at a time. Alert asks
-    before blocking another consumer, Block keeps Better Panel active, and
-    Allow lets the other consumer take over (which can stop Better Panel).
-  $options:
-  - alert: Alert before blocking
-  - block: Keep Better Panel active
-  - allow: Allow the other consumer
-*/
-// ==/WindhawkModSettings==
-
 
 #include <xamlom.h>
 
@@ -1485,6 +1489,7 @@ void ApplyCustomizations(InstanceHandle handle,
 void CleanupCustomizations(InstanceHandle handle);
 void BetterPanelSuppressNativeElementOnAdd(
     winrt::Microsoft::UI::Xaml::FrameworkElement const& element);
+void BetterPanelScheduleCurrentThreadDiscovery();
 
 HMODULE GetCurrentModuleHandle() {
     HMODULE module;
@@ -1902,6 +1907,7 @@ using namespace std::string_view_literals;
 #include <winstring.h>
 
 #include <winrt/Microsoft.UI.Composition.h>
+#include <winrt/Microsoft.UI.Content.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <winrt/Microsoft.UI.Text.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
@@ -2399,6 +2405,7 @@ struct BetterPanelAudioMetadata {
 
 struct BetterPanelState {
     mud::DispatcherQueue dispatcher{nullptr};
+    HWND explorerWindow = nullptr;
     DispatcherTimer timer{nullptr};
     DispatcherTimer mediaTimer{nullptr};
     DispatcherTimer videoControlsTimer{nullptr};
@@ -2589,6 +2596,8 @@ bool g_betterShuffleEnabled = false;
 
 void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state);
 void BetterPanelInvalidateExplorerQueryCaches();
+HWND BetterPanelGetFocusedTabWindow();
+
 void BetterPanelPrepareMiddleClick(MSG const* message);
 void BetterPanelHandleMiddleClick(MSG const* message);
 
@@ -2609,17 +2618,7 @@ bool BetterPanelMessageCanChangeExplorerState(MSG const* message) {
     }
 }
 
-void BetterPanelQueueInteractiveRefresh(MSG const* message) {
-    if (message && message->message == WM_MBUTTONDOWN) {
-        BetterPanelPrepareMiddleClick(message);
-        return;
-    }
-    if (!BetterPanelMessageCanChangeExplorerState(message)) return;
-
-    if (message->message == WM_MBUTTONUP) {
-        BetterPanelHandleMiddleClick(message);
-    }
-
+void BetterPanelQueueCurrentThreadRefresh(bool skipEditingStates = false) {
     BetterPanelInvalidateExplorerQueryCaches();
     std::lock_guard lock(g_betterPanelMutex);
     for (auto const& state : g_betterPanels) {
@@ -2627,11 +2626,11 @@ void BetterPanelQueueInteractiveRefresh(MSG const* message) {
             !state->dispatcher || !state->dispatcher.HasThreadAccess()) {
             continue;
         }
-        if ((message->message == WM_KEYUP ||
-             message->message == WM_SYSKEYUP) &&
+        if (skipEditingStates &&
             (state->textEditing || state->metadataEditing)) {
             continue;
         }
+
         state->transferLastScanTick = 0;
         state->interactiveRefreshQueued = true;
         std::weak_ptr<BetterPanelState> weakState = state;
@@ -2644,6 +2643,27 @@ void BetterPanelQueueInteractiveRefresh(MSG const* message) {
             state->interactiveRefreshQueued = false;
         }
     }
+}
+
+void BetterPanelQueueInteractiveRefresh(MSG const* message) {
+    if (message && message->message == WM_MBUTTONDOWN) {
+        BetterPanelPrepareMiddleClick(message);
+        return;
+    }
+    if (!BetterPanelMessageCanChangeExplorerState(message)) return;
+
+    if (message->message == WM_MBUTTONUP) {
+        BetterPanelHandleMiddleClick(message);
+    }
+
+    // Capture the native tab while Explorer's input message still has focus.
+    // Deferred XAML refreshes often run after focus has moved into the details
+    // pane, where enumerating visible ShellTabWindowClass windows can select a
+    // stale background tab (commonly Home/This PC).
+    BetterPanelGetFocusedTabWindow();
+    BetterPanelScheduleCurrentThreadDiscovery();
+    BetterPanelQueueCurrentThreadRefresh(
+        message->message == WM_KEYUP || message->message == WM_SYSKEYUP);
 }
 
 void BetterPanelApplyEditorBackspace(muxc::TextBox const& editor) {
@@ -2907,6 +2927,64 @@ std::wstring BetterPanelExtractFolderPath(IShellBrowser* shellBrowser) {
 }
 
 thread_local HWND g_betterLastFocusedTabWindow = nullptr;
+thread_local HWND g_betterQueryExplorerWindow = nullptr;
+
+HWND BetterPanelGetExplorerWindowForElement(FrameworkElement const& element) {
+    // ContentIslandEnvironment::AppWindowId is an identifier, not an HWND.
+    // Treating its numeric Value as a window handle can associate the panel
+    // with an unrelated/invalid root and makes selection queries read Home or
+    // a background tab. DetailsPaneControl runs on its owning Explorer
+    // window's UI thread, so resolve the real CabinetWClass on that thread.
+    auto isExplorerRoot = [](HWND window) {
+        if (!window) return false;
+        WCHAR className[64]{};
+        DWORD processId = 0;
+        return GetWindowThreadProcessId(window, &processId) != 0 &&
+               processId == GetCurrentProcessId() &&
+               GetClassNameW(window, className, ARRAYSIZE(className)) != 0 &&
+               _wcsicmp(className, L"CabinetWClass") == 0;
+    };
+
+    for (HWND candidate : {GetActiveWindow(), GetForegroundWindow()}) {
+        HWND root = candidate ? GetAncestor(candidate, GA_ROOT) : nullptr;
+        if (isExplorerRoot(root) &&
+            GetWindowThreadProcessId(root, nullptr) == GetCurrentThreadId()) {
+            return root;
+        }
+    }
+
+    struct FindContext {
+        HWND window = nullptr;
+    } context;
+    EnumThreadWindows(
+        GetCurrentThreadId(),
+        [](HWND window, LPARAM parameter) -> BOOL {
+            auto context = reinterpret_cast<FindContext*>(parameter);
+            WCHAR className[64]{};
+            if (IsWindowVisible(window) &&
+                GetClassNameW(window, className, ARRAYSIZE(className)) &&
+                _wcsicmp(className, L"CabinetWClass") == 0) {
+                context->window = window;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&context));
+    return context.window;
+}
+
+struct BetterPanelExplorerWindowScope {
+    HWND previous = nullptr;
+
+    explicit BetterPanelExplorerWindowScope(HWND window)
+        : previous(g_betterQueryExplorerWindow) {
+        g_betterQueryExplorerWindow = window;
+    }
+
+    ~BetterPanelExplorerWindowScope() {
+        g_betterQueryExplorerWindow = previous;
+    }
+};
 
 HWND BetterPanelGetFocusedTabWindow() {
     HWND focus = nullptr;
@@ -2928,20 +3006,26 @@ HWND BetterPanelGetFocusedTabWindow() {
     }
 
     // Focus moves into the injected details pane when its controls are used.
-    // Resolve the visible tab from the foreground Explorer window in that case.
-    HWND root = GetAncestor(focus ? focus : GetForegroundWindow(), GA_ROOT);
-    if (root && g_betterLastFocusedTabWindow &&
-        GetAncestor(g_betterLastFocusedTabWindow, GA_ROOT) == root &&
-        IsWindow(g_betterLastFocusedTabWindow) &&
-        BetterPanelGetShellBrowser(g_betterLastFocusedTabWindow)) {
-        return g_betterLastFocusedTabWindow;
-    }
+    // Resolve the currently visible tab before consulting the cache. Returning
+    // a cached tab here first could permanently pin queries to a background
+    // Home tab after the user switched tabs or navigated elsewhere.
+    HWND root = g_betterQueryExplorerWindow &&
+                        IsWindow(g_betterQueryExplorerWindow)
+                    ? g_betterQueryExplorerWindow
+                    : GetAncestor(focus ? focus : GetForegroundWindow(),
+                                  GA_ROOT);
     for (HWND tab = nullptr; root &&
          (tab = FindWindowExW(root, tab, L"ShellTabWindowClass", nullptr));) {
         if (IsWindowVisible(tab) && BetterPanelGetShellBrowser(tab)) {
             g_betterLastFocusedTabWindow = tab;
             return tab;
         }
+    }
+    if (root && g_betterLastFocusedTabWindow &&
+        GetAncestor(g_betterLastFocusedTabWindow, GA_ROOT) == root &&
+        IsWindow(g_betterLastFocusedTabWindow) &&
+        BetterPanelGetShellBrowser(g_betterLastFocusedTabWindow)) {
+        return g_betterLastFocusedTabWindow;
     }
     return nullptr;
 }
@@ -7357,10 +7441,16 @@ void BetterPanelRefreshPlaybackState(
 void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     if (!state || state->unloaded) return;
     if (auto panel = state->panel.get(); panel && !panel.IsLoaded()) return;
+    BetterPanelExplorerWindowScope explorerWindowScope(state->explorerWindow);
     BetterPanelEnsureShareActions(state);
     BetterPanelHideNativeDetails(state);
     auto activeSelection = BetterPanelGetActiveSelectionPaths();
     bool isHome = activeSelection.empty() && BetterPanelIsActiveHome();
+    Wh_Log(L"Refresh explorer=%p tab=%p selectionCount=%zu first=%s home=%d",
+           state->explorerWindow, BetterPanelGetFocusedTabWindow(),
+           activeSelection.size(),
+           activeSelection.empty() ? L"" : activeSelection.front().c_str(),
+           isHome ? 1 : 0);
     if (!isHome && state->homeWasVisible && activeSelection.empty() &&
         BetterPanelGetActiveFolderPath().empty() &&
         BetterPanelGetActiveFolderDisplayName().empty()) {
@@ -7834,6 +7924,9 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     auto state = std::make_shared<BetterPanelState>();
     std::weak_ptr<BetterPanelState> weakState = state;
     state->dispatcher = host.DispatcherQueue();
+    state->explorerWindow = BetterPanelGetExplorerWindowForElement(host);
+    Wh_Log(L"Installed panel host=%p explorer=%p thread=%u",
+           winrt::get_abi(host), state->explorerWindow, GetCurrentThreadId());
     state->host = winrt::make_weak(host);
 
     muxc::StackPanel panel;
@@ -9432,6 +9525,93 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     std::lock_guard lock(g_betterPanelMutex);
     g_betterPanels.push_back(std::move(state));
     Wh_Log(L"Better Detail Panel 0.5 added");
+}
+
+// Diagnostics-free discovery. Explorer Command Bar demonstrated that a typed
+// WinUI element supplied by FileExplorerExtensions.dll can safely anchor a
+// public VisualTreeHelper walk. Keeping only a weak anchor avoids owning any of
+// Explorer's XAML elements and allows Windows 11 File Explorer Styler to remain
+// the process's single XAML Diagnostics consumer.
+std::atomic<bool> g_betterPanelDiscoveryUnloading;
+thread_local winrt::weak_ref<UIElement> g_betterPanelDiscoveryAnchor;
+thread_local bool g_betterPanelDiscoveryQueued = false;
+
+bool BetterPanelFindAndInstallDetailsHost(DependencyObject const& root,
+                                          int depth = 0) {
+    if (!root || depth > 64 || g_betterPanelDiscoveryUnloading) return false;
+
+    bool found = false;
+    if (auto element = root.try_as<FrameworkElement>(); element) {
+        if (element.Name() == L"DetailsViewThumbnail") {
+            TryInstallBetterDetailPanel(element);
+            found = true;
+        }
+    }
+
+    int count = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
+        GetChildrenCount(root);
+    for (int i = 0; i < count; ++i) {
+        auto child = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
+            GetChild(root, i);
+        if (BetterPanelFindAndInstallDetailsHost(child, depth + 1)) {
+            found = true;
+        }
+    }
+    return found;
+}
+
+void BetterPanelScanFromElement(UIElement const& element) try {
+    if (!element || g_betterPanelDiscoveryUnloading) {
+        return;
+    }
+    auto xamlRoot = element.XamlRoot();
+    auto content = xamlRoot ? xamlRoot.Content() : nullptr;
+    if (content) BetterPanelFindAndInstallDetailsHost(content);
+} catch (...) {
+    Wh_Log(L"Details discovery error %08X", winrt::to_hresult().value);
+}
+
+void BetterPanelRememberDiscoveryAnchor(UIElement const& element) {
+    if (element) g_betterPanelDiscoveryAnchor = winrt::make_weak(element);
+}
+
+void BetterPanelScanCurrentThread() try {
+    if (g_betterPanelDiscoveryUnloading) {
+        return;
+    }
+    if (auto anchor = g_betterPanelDiscoveryAnchor.get()) {
+        BetterPanelScanFromElement(anchor);
+    }
+    auto focused = mux::Input::FocusManager::GetFocusedElement();
+    if (auto element = focused ? focused.try_as<UIElement>() : nullptr) {
+        BetterPanelRememberDiscoveryAnchor(element);
+        BetterPanelScanFromElement(element);
+    }
+} catch (...) {
+    Wh_Log(L"Current-thread discovery error %08X",
+           winrt::to_hresult().value);
+}
+
+void BetterPanelScheduleCurrentThreadDiscovery() try {
+    if (g_betterPanelDiscoveryUnloading || g_betterPanelDiscoveryQueued) {
+        return;
+    }
+    auto dispatcher =
+        winrt::Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread();
+    if (!dispatcher) {
+        BetterPanelScanCurrentThread();
+        return;
+    }
+    g_betterPanelDiscoveryQueued = true;
+    if (!dispatcher.TryEnqueue([] {
+            g_betterPanelDiscoveryQueued = false;
+            BetterPanelScanCurrentThread();
+        })) {
+        g_betterPanelDiscoveryQueued = false;
+    }
+} catch (...) {
+    g_betterPanelDiscoveryQueued = false;
+    Wh_Log(L"Queue discovery error %08X", winrt::to_hresult().value);
 }
 
 void RemoveBetterDetailPanelsForCurrentThread() {
@@ -14792,6 +14972,8 @@ void UninitializeForCurrentThread() {
 
     UninitializeResourceVariables();
 
+    g_betterPanelDiscoveryAnchor = {};
+    g_betterPanelDiscoveryQueued = false;
     g_initializedForThread = false;
 }
 
@@ -14998,7 +15180,7 @@ void OnWindowCreated(HWND hWnd, PCSTR funcName) {
         }
 
         InitializeForCurrentThread();
-        InitializeSettingsAndTap();
+        BetterPanelScheduleCurrentThreadDiscovery();
     }
 }
 
@@ -15108,6 +15290,226 @@ HWND WINAPI CreateWindowInBandEx_Hook(DWORD dwExStyle,
     return hWnd;
 }
 
+// Diagnostics-free details-pane discovery, adapted from the symbol-hook
+// approach reviewed for Windhawk's Explorer Command Bar mod (PR #4895).
+using BetterPanelDetailsPaneControl_OnLoaded_t =
+    void(WINAPI*)(void* pThis, void* sender, void* args);
+BetterPanelDetailsPaneControl_OnLoaded_t
+    BetterPanelDetailsPaneControl_OnLoaded_Original;
+
+void WINAPI BetterPanelDetailsPaneControl_OnLoaded_Hook(
+    void* pThis, void* sender, void* args) {
+    UIElement discoveryAnchor{nullptr};
+    if (!g_betterPanelDiscoveryUnloading && sender) {
+        // Explorer passes this lifecycle callback's sender as a raw ABI
+        // IInspectable pointer on current builds, even though the public PDB
+        // describes a projected const-reference. Copying from ABI both uses
+        // the correct pointer level and keeps the element alive across the
+        // original handler.
+        wf::IInspectable inspectable{nullptr};
+        winrt::copy_from_abi(inspectable, sender);
+        if (inspectable) {
+            discoveryAnchor = inspectable.try_as<UIElement>();
+        }
+    }
+
+    BetterPanelDetailsPaneControl_OnLoaded_Original(pThis, sender, args);
+    if (g_betterPanelDiscoveryUnloading) return;
+
+    if (discoveryAnchor) {
+        BetterPanelRememberDiscoveryAnchor(discoveryAnchor);
+        // The sender is the exact DetailsPaneControl that loaded. Search only
+        // its subtree so another tab's cached details host can't be selected.
+        BetterPanelFindAndInstallDetailsHost(discoveryAnchor);
+    }
+    BetterPanelScheduleCurrentThreadDiscovery();
+}
+
+// Explorer raises this from the details-pane view model whenever its native
+// selection source changes. Hooking the real event avoids depending on Win32
+// mouse messages, which WinUI doesn't consistently route through GetMessage.
+using BetterPanelDetailsPaneControlVM_SelectionUpdated_t =
+    void(WINAPI*)(void* pThis, void* selectionSource, void* args);
+BetterPanelDetailsPaneControlVM_SelectionUpdated_t
+    BetterPanelDetailsPaneControlVM_SelectionUpdated_Original;
+
+void WINAPI BetterPanelDetailsPaneControlVM_SelectionUpdated_Hook(
+    void* pThis, void* selectionSource, void* args) {
+    BetterPanelDetailsPaneControlVM_SelectionUpdated_Original(
+        pThis, selectionSource, args);
+    if (g_betterPanelDiscoveryUnloading) return;
+
+    // Defer one dispatcher turn so IFolderView2 exposes the same selection the
+    // native details pane has just accepted.
+    BetterPanelQueueCurrentThreadRefresh();
+}
+
+using BetterPanelCommandBarManager_CommandBar_t =
+    void(WINAPI*)(void* pThis, void* commandBar);
+BetterPanelCommandBarManager_CommandBar_t
+    BetterPanelCommandBarManager_CommandBar_Original;
+
+void WINAPI BetterPanelCommandBarManager_CommandBar_Hook(void* pThis,
+                                                          void* commandBar) {
+    BetterPanelCommandBarManager_CommandBar_Original(pThis, commandBar);
+    if (g_betterPanelDiscoveryUnloading || !commandBar) return;
+    try {
+        auto const& bar = *reinterpret_cast<muxc::CommandBar const*>(commandBar);
+        if (!bar) return;
+        BetterPanelRememberDiscoveryAnchor(bar);
+        BetterPanelScheduleCurrentThreadDiscovery();
+    } catch (...) {
+        Wh_Log(L"Command-bar discovery error %08X",
+               winrt::to_hresult().value);
+    }
+}
+
+using BetterPanelCommandBarControl_OnApplyTemplate_t =
+    void(WINAPI*)(void* pThis);
+BetterPanelCommandBarControl_OnApplyTemplate_t
+    BetterPanelCommandBarControl_OnApplyTemplate_Original;
+BetterPanelCommandBarControl_OnApplyTemplate_t
+    BetterPanelCommandBarControl_Wave1_OnApplyTemplate_Original;
+
+void WINAPI BetterPanelCommandBarControl_OnApplyTemplate_Hook(void* pThis) {
+    BetterPanelCommandBarControl_OnApplyTemplate_Original(pThis);
+    BetterPanelScheduleCurrentThreadDiscovery();
+}
+
+void WINAPI BetterPanelCommandBarControl_Wave1_OnApplyTemplate_Hook(
+    void* pThis) {
+    BetterPanelCommandBarControl_Wave1_OnApplyTemplate_Original(pThis);
+    BetterPanelScheduleCurrentThreadDiscovery();
+}
+
+using BetterPanelCommandBarControl_GotFocusHandler_t =
+    void(WINAPI*)(void* pThis, void* sender, void* args);
+BetterPanelCommandBarControl_GotFocusHandler_t
+    BetterPanelCommandBarControl_GotFocusHandler_Original;
+BetterPanelCommandBarControl_GotFocusHandler_t
+    BetterPanelCommandBarControl_Wave1_GotFocusHandler_Original;
+
+void BetterPanelHandleCommandBarFocus(void* sender) {
+    if (g_betterPanelDiscoveryUnloading || !sender) {
+        return;
+    }
+    try {
+        auto const& inspectable =
+            *reinterpret_cast<wf::IInspectable const*>(sender);
+        if (auto element =
+                inspectable ? inspectable.try_as<UIElement>() : nullptr) {
+            BetterPanelRememberDiscoveryAnchor(element);
+            BetterPanelScheduleCurrentThreadDiscovery();
+        }
+    } catch (...) {
+        Wh_Log(L"Focus discovery error %08X", winrt::to_hresult().value);
+    }
+}
+
+void WINAPI BetterPanelCommandBarControl_GotFocusHandler_Hook(
+    void* pThis, void* sender, void* args) {
+    BetterPanelCommandBarControl_GotFocusHandler_Original(pThis, sender, args);
+    BetterPanelHandleCommandBarFocus(sender);
+}
+
+void WINAPI BetterPanelCommandBarControl_Wave1_GotFocusHandler_Hook(
+    void* pThis, void* sender, void* args) {
+    BetterPanelCommandBarControl_Wave1_GotFocusHandler_Original(pThis, sender,
+                                                                args);
+    BetterPanelHandleCommandBarFocus(sender);
+}
+
+std::atomic<bool> g_betterPanelExplorerSymbolsHooked;
+
+bool BetterPanelHookExplorerSymbols(HMODULE module) {
+    WindhawkUtils::SYMBOL_HOOK hooks[] = {
+        {
+            {
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::DetailsPaneControl::OnLoaded(struct winrt::Windows::Foundation::IInspectable const &,struct winrt::Microsoft::UI::Xaml::RoutedEventArgs const &))",
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::DetailsPaneControl::OnLoaded(struct winrt::Windows::Foundation::IInspectable const & __ptr64,struct winrt::Microsoft::UI::Xaml::RoutedEventArgs const & __ptr64) __ptr64)",
+            },
+            &BetterPanelDetailsPaneControl_OnLoaded_Original,
+            BetterPanelDetailsPaneControl_OnLoaded_Hook,
+            true,
+        },
+        {
+            {
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::DetailsPaneControlVM::SelectionUpdated(struct winrt::WindowsUdk::UI::Shell::FileExplorerSelectionSource,struct winrt::Windows::Foundation::IInspectable))",
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::DetailsPaneControlVM::SelectionUpdated(struct winrt::WindowsUdk::UI::Shell::FileExplorerSelectionSource,struct winrt::Windows::Foundation::IInspectable) __ptr64)",
+            },
+            &BetterPanelDetailsPaneControlVM_SelectionUpdated_Original,
+            BetterPanelDetailsPaneControlVM_SelectionUpdated_Hook,
+            true,
+        },
+        {
+            {
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarManager::CommandBar(struct winrt::Microsoft::UI::Xaml::Controls::CommandBar const &))",
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarManager::CommandBar(struct winrt::Microsoft::UI::Xaml::Controls::CommandBar const & __ptr64) __ptr64)",
+            },
+            &BetterPanelCommandBarManager_CommandBar_Original,
+            BetterPanelCommandBarManager_CommandBar_Hook,
+            true,
+        },
+        {
+            {
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl::OnApplyTemplate(void))",
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl::OnApplyTemplate(void) __ptr64)",
+            },
+            &BetterPanelCommandBarControl_OnApplyTemplate_Original,
+            BetterPanelCommandBarControl_OnApplyTemplate_Hook,
+            true,
+        },
+        {
+            {
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl_Wave1::OnApplyTemplate(void))",
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl_Wave1::OnApplyTemplate(void) __ptr64)",
+            },
+            &BetterPanelCommandBarControl_Wave1_OnApplyTemplate_Original,
+            BetterPanelCommandBarControl_Wave1_OnApplyTemplate_Hook,
+            true,
+        },
+        {
+            {
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl::CommandBarControlGotFocusHandler(struct winrt::Windows::Foundation::IInspectable const &,struct winrt::Microsoft::UI::Xaml::RoutedEventArgs const &))",
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl::CommandBarControlGotFocusHandler(struct winrt::Windows::Foundation::IInspectable const & __ptr64,struct winrt::Microsoft::UI::Xaml::RoutedEventArgs const & __ptr64) __ptr64)",
+            },
+            &BetterPanelCommandBarControl_GotFocusHandler_Original,
+            BetterPanelCommandBarControl_GotFocusHandler_Hook,
+            true,
+        },
+        {
+            {
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl_Wave1::CommandBarControlGotFocusHandler(struct winrt::Windows::Foundation::IInspectable const &,struct winrt::Microsoft::UI::Xaml::RoutedEventArgs const &))",
+                LR"(public: void __cdecl winrt::FileExplorerExtensions::implementation::CommandBarControl_Wave1::CommandBarControlGotFocusHandler(struct winrt::Windows::Foundation::IInspectable const & __ptr64,struct winrt::Microsoft::UI::Xaml::RoutedEventArgs const & __ptr64) __ptr64)",
+            },
+            &BetterPanelCommandBarControl_Wave1_GotFocusHandler_Original,
+            BetterPanelCommandBarControl_Wave1_GotFocusHandler_Hook,
+            true,
+        },
+    };
+
+    if (!HookSymbols(module, hooks, ARRAYSIZE(hooks))) return false;
+    return BetterPanelDetailsPaneControl_OnLoaded_Original ||
+           BetterPanelDetailsPaneControlVM_SelectionUpdated_Original ||
+           BetterPanelCommandBarManager_CommandBar_Original ||
+           BetterPanelCommandBarControl_OnApplyTemplate_Original ||
+           BetterPanelCommandBarControl_Wave1_OnApplyTemplate_Original;
+}
+
+bool BetterPanelHookExplorerSymbolsIfLoaded(bool applyHooks) {
+    if (g_betterPanelExplorerSymbolsHooked) return true;
+    HMODULE module = GetModuleHandleW(L"FileExplorerExtensions.dll");
+    if (!module) return true;
+    if (g_betterPanelExplorerSymbolsHooked.exchange(true)) return true;
+    if (!BetterPanelHookExplorerSymbols(module)) {
+        g_betterPanelExplorerSymbolsHooked = false;
+        Wh_Log(L"FileExplorerExtensions discovery symbols unavailable");
+        return false;
+    }
+    if (applyHooks) Wh_ApplyHookOperations();
+    return true;
+}
+
 PFN_INITIALIZE_XAML_DIAGNOSTICS_EX InitializeXamlDiagnosticsEx_Original;
 HRESULT WINAPI
 InitializeXamlDiagnosticsEx_Hook(_In_ PCWSTR endPointName,
@@ -15214,14 +15616,14 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName,
                                    DWORD dwFlags) {
     HMODULE module = LoadLibraryExW_Original(lpLibFileName, hFile, dwFlags);
 
-    if (module && !InitializeXamlDiagnosticsEx_Original && lpLibFileName) {
-        PCWSTR fileName = wcsrchr(lpLibFileName, L'\\');
-        fileName = fileName ? fileName + 1 : lpLibFileName;
-        // CoreMessagingXP.dll loads Microsoft.Internal.FrameworkUdk.dll via the
-        // import table.
-        if (_wcsicmp(fileName, L"CoreMessagingXP.dll") == 0 &&
-            HookInitializeXamlDiagnosticsExIfNeeded()) {
-            Wh_ApplyHookOperations();
+    if (module && !g_betterPanelDiscoveryUnloading && lpLibFileName) {
+        PCWSTR fileName = lpLibFileName;
+        for (PCWSTR p = lpLibFileName; *p; ++p) {
+            if (*p == L'\\' || *p == L'/') fileName = p + 1;
+        }
+        if (_wcsicmp(fileName, L"FileExplorerExtensions.dll") == 0 ||
+            _wcsicmp(fileName, L"FileExplorerExtensions") == 0) {
+            BetterPanelHookExplorerSymbolsIfLoaded(/*applyHooks=*/true);
         }
     }
 
@@ -15493,15 +15895,9 @@ void LoadSettings() {
     g_settings.backgroundTranslucentEffect.reset();
     g_settings.explorerFrameContainerHeight = 0;
 
-    PCWSTR betterPanelDiagnosticsHandling =
-        Wh_GetStringSetting(L"xamlDiagnosticsHandling");
-    g_settings.xamlDiagnosticsHandling = XamlDiagnosticsHandling::kAlert;
-    if (wcscmp(betterPanelDiagnosticsHandling, L"block") == 0) {
-        g_settings.xamlDiagnosticsHandling = XamlDiagnosticsHandling::kBlock;
-    } else if (wcscmp(betterPanelDiagnosticsHandling, L"allow") == 0) {
-        g_settings.xamlDiagnosticsHandling = XamlDiagnosticsHandling::kAllow;
-    }
-    Wh_FreeStringSetting(betterPanelDiagnosticsHandling);
+    // Kept only for dormant legacy diagnostics code. Better Panel 2.0 doesn't
+    // install that hook or occupy Explorer's XAML Diagnostics connection.
+    g_settings.xamlDiagnosticsHandling = XamlDiagnosticsHandling::kAllow;
     return;
 
 #if 0
@@ -15560,6 +15956,8 @@ void LoadThemeSettings() {
 BOOL Wh_ModInit() {
     Wh_Log(L">");
 
+    g_betterPanelDiscoveryUnloading = false;
+
     LoadSettings();
     LoadThemeSettings();
 
@@ -15577,8 +15975,9 @@ BOOL Wh_ModInit() {
                                    LoadLibraryExW_Hook,
                                    &LoadLibraryExW_Original);
 
-    // Hook immediately if DLL is already loaded.
-    HookInitializeXamlDiagnosticsExIfNeeded();
+    // Hook Explorer's own WinUI lifecycle instead of taking the process-wide
+    // XAML Diagnostics slot used by Windows 11 File Explorer Styler.
+    BetterPanelHookExplorerSymbolsIfLoaded(/*applyHooks=*/false);
 
     HookWindowsUIFileExplorerSymbols();
 
@@ -15588,6 +15987,8 @@ BOOL Wh_ModInit() {
 void Wh_ModAfterInit() {
     Wh_Log(L">");
 
+    BetterPanelHookExplorerSymbolsIfLoaded(/*applyHooks=*/true);
+
     auto hTargetWnds = GetTargetWnds();
     for (auto hTargetWnd : hTargetWnds) {
         Wh_Log(L"Initializing for %08X", (DWORD)(ULONG_PTR)hTargetWnd);
@@ -15595,23 +15996,20 @@ void Wh_ModAfterInit() {
             hTargetWnd,
             [](PVOID param) {
                 InitializeForCurrentThread();
+                BetterPanelScheduleCurrentThreadDiscovery();
 
             },
             (PVOID)hTargetWnd);
     }
 
-    if (hTargetWnds.size() > 0) {
-        Wh_Log(L"Initializing - Found target windows");
-        InitializeSettingsAndTap();
-    }
 }
 
 void Wh_ModUninit() {
     Wh_Log(L">");
 
-    BetterPanelCloseMedia();
+    g_betterPanelDiscoveryUnloading = true;
 
-    UninitializeSettingsAndTap();
+    BetterPanelCloseMedia();
 
     auto hTargetWnds = GetTargetWnds();
     for (auto hTargetWnd : hTargetWnds) {
@@ -15648,8 +16046,6 @@ void Wh_ModUninit() {
 void Wh_ModSettingsChanged() {
     Wh_Log(L">");
 
-    UninitializeSettingsAndTap();
-
     LoadSettings();
     LoadThemeSettings();
 
@@ -15661,13 +16057,10 @@ void Wh_ModSettingsChanged() {
             [](PVOID param) {
                 UninitializeForCurrentThread();
                 InitializeForCurrentThread();
+                BetterPanelScheduleCurrentThreadDiscovery();
 
             },
             (PVOID)hTargetWnd);
     }
 
-    if (hTargetWnds.size() > 0) {
-        Wh_Log(L"Reinitializing - Found target windows");
-        InitializeSettingsAndTap();
-    }
 }

@@ -23,11 +23,12 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
-> **Version 1.15.22 is a stability recovery following the major v1.15.10
-> recode.** It retains the resource and responsiveness improvements while
-> correcting timing instability between Better Panel and Explorer's native
-> details UI. New bugs may still be present while the revised behavior receives
-> broader testing.
+> **Version 2.0.0-beta.1 is a beta release.** Better Panel now discovers the
+> Details pane through Explorer lifecycle hooks instead of occupying Explorer's
+> single XAML Diagnostics connection. It should therefore be able to run beside
+> Windows 11 File Explorer Styler. This has been confirmed on the tested Windows
+> 11 25H2 system, but broader Windows-build and mod-combination testing is still
+> needed.
 
 ## Features
 
@@ -102,12 +103,25 @@ Once the mod is accepted into the official Windhawk catalog, search for
 Windhawk's official guide explains the local mod format and editor workflow:
 [Creating a new mod](https://github.com/ramensoftware/windhawk/wiki/Creating-a-new-mod).
 
-## Important conflict warning
+## File Explorer Styler compatibility — Beta
 
-Explorer permits only one XAML diagnostics consumer at a time. Do not enable
-Better Panel together with another File Explorer mod that uses XAML diagnostics.
-The mod includes a compatibility setting that can alert, block, or allow a
-competing diagnostics consumer.
+Better Panel 2.0 no longer occupies Explorer's XAML Diagnostics connection. It
+uses Explorer lifecycle and selection hooks to locate and update the modern
+Details pane, allowing Windows 11 File Explorer Styler to remain the process's
+XAML Diagnostics consumer.
+
+Running Better Panel together with Windows 11 File Explorer Styler has been
+confirmed on the tested Windows 11 25H2 system without a conflict warning.
+Because the new method relies on private Explorer symbols, compatibility can
+vary after Windows updates and remains beta on other Windows builds.
+
+The first start after installing or updating this beta may take longer while
+Windhawk resolves and caches Explorer's private symbols. If Better Panel loads
+incompletely, continues showing old content, or does not react to selections,
+allow Windhawk to finish processing and restart File Explorer. If it still does
+not initialize correctly, restart Windows before reporting the problem. Manual
+cache deletion is not normally required and should be used only when directed
+during troubleshooting.
 
 ## Reporting a problem
 
@@ -124,8 +138,7 @@ Open a GitHub issue and include:
 
 Copyright (C) 2026 Nicole S.
 
-Better Panel is its own separate mod. Its XAML diagnostics compatibility layer
-allows Explorer functionality that needs the single diagnostics connection to
-work together; it does not make Better Panel a theme or styling mod.
+Better Panel is its own separate mod. It does not contain, fork, or replace
+Windows 11 File Explorer Styler and is not a theme or styling mod.
 
 Distributed under the [GNU General Public License v3.0 or later](LICENSE).
