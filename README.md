@@ -23,7 +23,7 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
-> **Version 2.0.0-beta.1 is a beta release.** Better Panel now discovers the
+> **Version 2.1.2-beta.2 is a beta release.** Better Panel now discovers the
 > Details pane through Explorer lifecycle hooks instead of occupying Explorer's
 > single XAML Diagnostics connection. It should therefore be able to run beside
 > Windows 11 File Explorer Styler. This has been confirmed on the tested Windows
@@ -33,14 +33,15 @@ those elements and require a mod update even on an otherwise compatible release.
 ## Features
 
 - Middle-click a folder to request Explorer's native **Open in new tab** action.
-- A custom Home panel with drives, capacity bars, available space, and recent
-  folders that navigate in the active Explorer tab.
+- A custom Home panel with native Shell icons, drives, capacity bars, available
+  space, and persistent Recent/Favorites views that navigate in the active tab.
 - Drive shortcuts, storage statistics, volume and filesystem information, Disk
   Cleanup, Optimize Drives, and Windows Storage controls.
 - Folder and multiple-selection analysis with size, file and subfolder counts,
   file types, and modified-date summaries.
-- Native-looking Share, Open, and Open with controls.
-- File-type icons, one clean title row, and pencil-button inline renaming.
+- Native-looking Share, Open, and Open with controls, plus aligned icon-only
+  Favorites, Print, Delete, and Copy controls where supported.
+- File-type icons, one clean title row, and click-to-edit inline renaming.
 - Responsive image previews and animated GIF playback.
 - Inline PDF viewing with page navigation, page counts, scrolling, and sharp
   50–250% re-rendered zoom.

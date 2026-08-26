@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.1.2-beta.2
+
+> **Beta:** This update expands the diagnostics-free Beta 1 build with native
+> Favorites integration and a redesigned Home experience. Compatibility with
+> Windows 11 File Explorer Styler remains confirmed on the tested Windows 11
+> 25H2 system; broader Windows-build testing is still needed.
+
+### Notes
+
+The first start after installing or updating may take longer while Windhawk
+resolves and caches Explorer's private symbols. If the panel loads incompletely
+or continues showing old content, allow processing to finish and restart File
+Explorer. Restart Windows if the problem remains. Manual cache deletion is not
+normally required.
+
+### Added
+
+- Added a native **Add to Favorites** and **Remove from Favorites** action.
+- Added persistent **Recent** and **Favorites** views to the custom Home panel.
+- Added Windows Shell icons for Home files, folders, archives, and drives using
+  the user's current file associations.
+- Added a Delete action for eligible files and folders.
+
+### Changed
+
+- Restyled **Devices and drives** with larger native drive artwork, clearer
+  capacity bars, compact spacing, and a flatter classic Explorer layout.
+- Moved **Move to** and archive extraction actions below the primary action row
+  so they remain visible at the panel's normal height.
+- Matched Open, Open with, rename, expand, restore, Print, Delete, and Copy more
+  closely to Explorer's native button styling, dimensions, and alignment.
+- Replaced the separate rename pencil with click-to-edit title text and refined
+  the editor dimensions to prevent clipping.
+- Removed the unavailable Share action from folder selections.
+- Protected main system and known folders from the panel's Delete action.
+
+### Fixed
+
+- Fixed folder actions and destination transfer controls being unavailable or
+  positioned below the panel's normally visible area.
+
 ## 2.0.0-beta.1
 
 > **Beta:** The new diagnostics-free Better Details-panel integration has been

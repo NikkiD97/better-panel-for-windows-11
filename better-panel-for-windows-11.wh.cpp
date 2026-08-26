@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         2.0.0-beta.1
+// @version         2.1.2-beta.2
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -51,7 +51,7 @@ current build does not support ARM64 or Windows 10. Because Better Panel uses
 Explorer's private WinUI Details-pane structure, Windows updates can require
 mod changes even on an otherwise compatible Windows release.
 
-**Version 2.0.0-beta.1 is a beta release.** Better Panel now discovers the
+**Version 2.1.2-beta.2 is a beta release.** Better Panel now discovers the
 Details pane through Explorer lifecycle hooks instead of occupying Explorer's
 single XAML Diagnostics connection. It should therefore be able to run beside
 Windows 11 File Explorer Styler. This has been confirmed on the tested Windows
@@ -62,15 +62,15 @@ needed.
 
 * Middle-click folder navigation through Explorer's native **Open in new tab**
   command.
-* A custom Home panel with devices, drives, capacity bars, available space, and
-  recently visited folders.
+* A custom Home panel with native Shell icons, devices, drives, capacity bars,
+  available space, and persistent Recent/Favorites views.
 * Direct drive navigation, detailed storage information, Disk Cleanup, Optimize
   Drives, and Windows Storage controls.
 * Folder and multiple-selection analysis with sizes, counts, types, and modified
   dates.
-* Compact inline **Share**, **Open**, and **Open with** actions.
-* File-type icons, a single clean title row, and inline renaming with a pencil
-  button.
+* Compact native-style **Share**, **Open**, and **Open with** actions, plus
+  aligned icon-only Favorites, Print, Delete, and Copy controls where supported.
+* File-type icons, a single clean title row, and click-to-rename titles.
 * Responsive image previews with inline expand and restore controls.
 * Animated GIF previews that use the original file instead of a static Explorer
   thumbnail.
@@ -116,6 +116,27 @@ Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 2.1.2-beta.2
+
+* Added a native **Add to Favorites** and **Remove from Favorites** action. The
+  star now reflects the real Windows Favorites state and turns yellow when the
+  selected item is favorited.
+* Added persistent **Recent** and **Favorites** views to the custom Home panel.
+  The selected view is restored the next time the panel opens.
+* Replaced generic Home file, folder, archive, and drive glyphs with icons
+  supplied by the Windows Shell and the user's current file associations.
+* Restyled **Devices and drives** with larger native drive artwork, compact
+  spacing, clearer capacity bars, and a flatter classic Explorer layout.
+* Removed the unavailable Share action from folders, added a recycle-aware
+  icon-only Delete action for eligible files and folders, and protected main
+  system and known folders from that action.
+* Moved **Move to** and archive extraction actions directly below the primary
+  buttons so they remain visible at the panel's normal height.
+* Matched the Open, Open with, rename, expand, restore, Print, Delete, and Copy
+  controls more closely to Explorer's native button styling and alignment.
+* Replaced the separate rename pencil with click-to-edit title text and refined
+  the editor sizing to prevent clipping.
 
 ### 2.0.0-beta.1
 
@@ -2444,10 +2465,14 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::TextBlock> status;
     winrt::weak_ref<muxc::Button> nativeShareButton;
     winrt::weak_ref<muxc::Panel> nativeShareParent;
-    winrt::weak_ref<muxc::StackPanel> shareActionRow;
+    winrt::weak_ref<muxc::Grid> shareActionRow;
     winrt::weak_ref<muxc::Button> openButton;
+    winrt::weak_ref<muxc::Image> openActionIcon;
     winrt::weak_ref<muxc::Button> openWithButton;
+    winrt::weak_ref<muxc::Button> singleDeleteButton;
     winrt::weak_ref<muxc::Button> extractButton;
+    winrt::weak_ref<muxc::Button> previewExpandButton;
+    winrt::weak_ref<muxc::Button> gifExpandButton;
     winrt::weak_ref<FrameworkElement> transferRow;
     winrt::weak_ref<muxc::Button> transferExtractButton;
     winrt::weak_ref<muxc::Button> transferMoveButton;
@@ -2468,6 +2493,7 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::TextBlock> pdfInfo;
     winrt::weak_ref<muxc::Button> pdfPreviousButton;
     winrt::weak_ref<muxc::Button> pdfNextButton;
+    winrt::weak_ref<muxc::Button> favoriteButton;
     winrt::weak_ref<muxc::Button> printButton;
     winrt::weak_ref<muxc::StackPanel> rootPanel;
     winrt::weak_ref<muxc::StackPanel> actionsHost;
@@ -2567,6 +2593,11 @@ struct BetterPanelState {
     std::wstring transferCachedSourcePath;
     std::wstring printHandlerPath;
     bool printHandlerAvailable = false;
+    std::wstring favoriteStatePath;
+    bool favoriteStateKnown = false;
+    bool favoritePinned = false;
+    bool favoriteCheckPending = false;
+    uint64_t favoriteCheckGeneration = 0;
     ULONGLONG nativeTitleLastSearchTick = 0;
     std::wstring nativeTitleSearchPath;
     ULONGLONG shareLastSearchTick = 0;
@@ -2593,6 +2624,121 @@ bool g_betterMediaMuted = false;
 double g_betterPlaybackRate = 1.0;
 bool g_betterRepeatEnabled = false;
 bool g_betterShuffleEnabled = false;
+
+std::optional<bool> BetterPanelReadFavoriteState(std::wstring const& path);
+void BetterPanelSetStatus(winrt::weak_ref<muxc::TextBlock> weakStatus,
+                          std::wstring_view text);
+IShellBrowser* BetterPanelGetShellBrowser(HWND window);
+
+void BetterPanelRefreshFavoritesViews(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::wstring const& path) {
+    SHChangeNotify(SHCNE_UPDATEITEM,
+                   SHCNF_PATHW | SHCNF_FLUSH,
+                   path.c_str(), nullptr);
+
+    PIDLIST_ABSOLUTE homePidl = nullptr;
+    if (SUCCEEDED(SHParseDisplayName(L"shell:Home", nullptr, &homePidl,
+                                     0, nullptr)) && homePidl) {
+        SHChangeNotify(SHCNE_UPDATEDIR,
+                       SHCNF_IDLIST | SHCNF_FLUSH,
+                       homePidl, nullptr);
+        CoTaskMemFree(homePidl);
+    }
+
+    HWND root = state && state->explorerWindow
+                    ? state->explorerWindow
+                    : GetForegroundWindow();
+    root = root ? GetAncestor(root, GA_ROOT) : nullptr;
+    for (HWND tab = nullptr; root &&
+         (tab = FindWindowExW(root, tab, L"ShellTabWindowClass", nullptr));) {
+        if (auto browser = BetterPanelGetShellBrowser(tab)) {
+            winrt::com_ptr<IShellView> view;
+            if (SUCCEEDED(browser->QueryActiveShellView(view.put())) && view) {
+                view->Refresh();
+            }
+        }
+    }
+}
+
+void BetterPanelApplyFavoriteVisual(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state) return;
+    auto button = state->favoriteButton.get();
+    if (!button) return;
+    auto icon = button.Content().try_as<muxc::FontIcon>();
+    if (icon) {
+        icon.Glyph(state->favoritePinned ? L"\uE735" : L"\uE734");
+        if (state->favoritePinned) {
+            icon.Foreground(
+                winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(
+                    winrt::Windows::UI::ColorHelper::FromArgb(
+                        255, 255, 193, 7)));
+        } else {
+            icon.ClearValue(muxc::IconElement::ForegroundProperty());
+        }
+    }
+    std::wstring label = state->favoritePinned
+                             ? L"Remove from Favorites"
+                             : L"Add to Favorites";
+    muxa::AutomationProperties::SetName(button, label);
+    muxc::ToolTipService::SetToolTip(button, winrt::box_value(label));
+}
+
+void BetterPanelQueueFavoriteCheck(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::wstring const& path, bool verifyAction = false,
+    bool expectedPinned = true) {
+    if (!state || path.empty()) return;
+    state->favoriteCheckPending = true;
+    uint64_t generation = ++state->favoriteCheckGeneration;
+    auto dispatcher = state->dispatcher;
+    std::weak_ptr<BetterPanelState> weakState = state;
+    std::thread([weakState, dispatcher, path, generation, verifyAction,
+                 expectedPinned]() {
+        HRESULT initialized = CoInitializeEx(nullptr,
+                                             COINIT_APARTMENTTHREADED);
+        std::optional<bool> pinned;
+        int attempts = verifyAction ? 12 : 1;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            if (attempt) Sleep(150);
+            pinned = BetterPanelReadFavoriteState(path);
+            if (pinned &&
+                (!verifyAction || *pinned == expectedPinned)) break;
+        }
+        if (SUCCEEDED(initialized)) CoUninitialize();
+        dispatcher.TryEnqueue(
+            [weakState, path, generation, pinned, verifyAction,
+             expectedPinned]() {
+                auto state = weakState.lock();
+                if (!state || state->unloaded ||
+                    state->favoriteCheckGeneration != generation ||
+                    state->selectedPath != path) {
+                    return;
+                }
+                state->favoriteCheckPending = false;
+                state->favoriteStatePath = path;
+                state->favoriteStateKnown = pinned.has_value();
+                state->favoritePinned = pinned.value_or(false);
+                BetterPanelApplyFavoriteVisual(state);
+                if (verifyAction) {
+                    bool changed = state->favoriteStateKnown &&
+                                   state->favoritePinned == expectedPinned;
+                    if (changed) {
+                        BetterPanelRefreshFavoritesViews(state, path);
+                    }
+                    BetterPanelSetStatus(
+                        state->status,
+                        changed
+                            ? (expectedPinned ? L"Added to Favorites"
+                                              : L"Removed from Favorites")
+                            : (expectedPinned
+                                   ? L"Windows did not add this item to Favorites"
+                                   : L"Windows did not remove this item from Favorites"));
+                }
+            });
+    }).detach();
+}
 
 void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state);
 void BetterPanelInvalidateExplorerQueryCaches();
@@ -4180,6 +4326,393 @@ HRESULT BetterPanelShowExtractMenu(std::wstring const& path) {
     return result;
 }
 
+bool BetterPanelFindFavoriteMenuCommand(HMENU menu,
+                                        IContextMenu* contextMenu,
+                                        IContextMenu3* contextMenu3,
+                                        IContextMenu2* contextMenu2,
+                                        UINT& command,
+                                        bool& removing) {
+    int count = GetMenuItemCount(menu);
+    for (int index = 0; index < count; index++) {
+        WCHAR label[256]{};
+        MENUITEMINFOW item{sizeof(item)};
+        item.fMask = MIIM_FTYPE | MIIM_STATE | MIIM_ID | MIIM_SUBMENU |
+                     MIIM_STRING;
+        item.dwTypeData = label;
+        item.cch = ARRAYSIZE(label) - 1;
+        if (!GetMenuItemInfoW(menu, index, TRUE, &item) ||
+            (item.fType & MFT_SEPARATOR)) {
+            continue;
+        }
+        if (item.hSubMenu) {
+            if (contextMenu3) {
+                LRESULT menuResult = 0;
+                contextMenu3->HandleMenuMsg2(
+                    WM_INITMENUPOPUP,
+                    reinterpret_cast<WPARAM>(item.hSubMenu),
+                    MAKELPARAM(index, FALSE), &menuResult);
+            } else if (contextMenu2) {
+                contextMenu2->HandleMenuMsg(
+                    WM_INITMENUPOPUP,
+                    reinterpret_cast<WPARAM>(item.hSubMenu),
+                    MAKELPARAM(index, FALSE));
+            }
+            if (BetterPanelFindFavoriteMenuCommand(
+                    item.hSubMenu, contextMenu, contextMenu3, contextMenu2,
+                    command, removing)) {
+                return true;
+            }
+        }
+        if (item.wID == static_cast<UINT>(-1) ||
+            (item.fState & (MFS_DISABLED | MFS_GRAYED))) {
+            continue;
+        }
+
+        std::wstring loweredLabel(label);
+        loweredLabel.erase(
+            std::remove(loweredLabel.begin(), loweredLabel.end(), L'&'),
+            loweredLabel.end());
+        std::transform(loweredLabel.begin(), loweredLabel.end(),
+                       loweredLabel.begin(), towlower);
+
+        WCHAR verb[128]{};
+        std::wstring loweredVerb;
+        if (SUCCEEDED(contextMenu->GetCommandString(
+                item.wID - 1, GCS_VERBW, nullptr,
+                reinterpret_cast<LPSTR>(verb), ARRAYSIZE(verb)))) {
+            loweredVerb.assign(verb);
+            std::transform(loweredVerb.begin(), loweredVerb.end(),
+                           loweredVerb.begin(), towlower);
+        }
+
+        bool add = loweredLabel.find(L"add to favorites") !=
+                       std::wstring::npos ||
+                   loweredVerb.find(L"pintohome") != std::wstring::npos;
+        bool remove = loweredLabel.find(L"remove from favorites") !=
+                          std::wstring::npos ||
+                      loweredVerb.find(L"unpinfromhome") !=
+                          std::wstring::npos;
+        if (add || remove) {
+            command = item.wID;
+            removing = remove;
+            return true;
+        }
+    }
+    return false;
+}
+
+std::wstring BetterPanelFavoritesListPath() {
+    WCHAR roamingAppData[MAX_PATH]{};
+    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr,
+                                SHGFP_TYPE_CURRENT, roamingAppData))) {
+        return {};
+    }
+    return std::wstring(roamingAppData) +
+           L"\\Microsoft\\Windows\\Recent\\AutomaticDestinations\\"
+           L"5f7b5f1e01b83767.automaticDestinations-ms";
+}
+
+uint16_t BetterPanelReadUInt16(std::vector<uint8_t> const& bytes,
+                               size_t offset) {
+    if (offset + 2 > bytes.size()) return 0;
+    return static_cast<uint16_t>(bytes[offset]) |
+           static_cast<uint16_t>(bytes[offset + 1] << 8);
+}
+
+uint32_t BetterPanelReadUInt32(std::vector<uint8_t> const& bytes,
+                               size_t offset) {
+    if (offset + 4 > bytes.size()) return 0;
+    return static_cast<uint32_t>(bytes[offset]) |
+           (static_cast<uint32_t>(bytes[offset + 1]) << 8) |
+           (static_cast<uint32_t>(bytes[offset + 2]) << 16) |
+           (static_cast<uint32_t>(bytes[offset + 3]) << 24);
+}
+
+std::optional<bool> BetterPanelReadFavoriteState(std::wstring const& path) {
+    std::wstring listPath = BetterPanelFavoritesListPath();
+    if (listPath.empty()) return std::nullopt;
+
+    winrt::com_ptr<IStorage> storage;
+    HRESULT result = StgOpenStorage(
+        listPath.c_str(), nullptr, STGM_READ | STGM_SHARE_DENY_WRITE,
+        nullptr, 0, storage.put());
+    if (FAILED(result) || !storage) return std::nullopt;
+
+    winrt::com_ptr<IStream> stream;
+    result = storage->OpenStream(L"DestList", nullptr,
+                                 STGM_READ | STGM_SHARE_EXCLUSIVE, 0,
+                                 stream.put());
+    if (FAILED(result) || !stream) return std::nullopt;
+
+    STATSTG stat{};
+    result = stream->Stat(&stat, STATFLAG_NONAME);
+    if (FAILED(result) || stat.cbSize.QuadPart < 32 ||
+        stat.cbSize.QuadPart > 16 * 1024 * 1024) {
+        return std::nullopt;
+    }
+    std::vector<uint8_t> bytes(static_cast<size_t>(stat.cbSize.QuadPart));
+    ULONG bytesRead = 0;
+    result = stream->Read(bytes.data(), static_cast<ULONG>(bytes.size()),
+                          &bytesRead);
+    if (FAILED(result) || bytesRead < 32) return std::nullopt;
+    bytes.resize(bytesRead);
+
+    uint32_t version = BetterPanelReadUInt32(bytes, 0);
+    uint32_t entryCount = BetterPanelReadUInt32(bytes, 4);
+    if (version < 3 || entryCount > 10000) return std::nullopt;
+
+    size_t offset = 32;
+    for (uint32_t index = 0;
+         index < entryCount && offset + 130 <= bytes.size(); index++) {
+        uint16_t pathLength = BetterPanelReadUInt16(bytes, offset + 128);
+        size_t pathBytes = static_cast<size_t>(pathLength) * 2;
+        if (offset + 130 + pathBytes > bytes.size()) return std::nullopt;
+
+        std::wstring entryPath;
+        entryPath.reserve(pathLength);
+        for (uint16_t character = 0; character < pathLength; character++) {
+            entryPath.push_back(static_cast<wchar_t>(BetterPanelReadUInt16(
+                bytes, offset + 130 + static_cast<size_t>(character) * 2)));
+        }
+        if (_wcsicmp(entryPath.c_str(), path.c_str()) == 0) {
+            return BetterPanelReadUInt32(bytes, offset + 108) != UINT32_MAX;
+        }
+        offset += 130 + pathBytes + 4;
+    }
+    return false;
+}
+
+HRESULT BetterPanelInvokeFavoriteCommand(std::wstring const& path,
+                                         IShellBrowser* shellBrowser) {
+    CLSID commandClass{};
+    HRESULT result = CLSIDFromString(
+        L"{b455f46e-e4af-4035-b0a4-cf18d2f6f28e}", &commandClass);
+    if (FAILED(result)) return result;
+
+    winrt::com_ptr<IExecuteCommand> executeCommand;
+    result = CoCreateInstance(commandClass, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(executeCommand.put()));
+    if (FAILED(result) || !executeCommand) return result;
+
+    winrt::com_ptr<IShellItem> item;
+    result = SHCreateItemFromParsingName(path.c_str(), nullptr,
+                                         IID_PPV_ARGS(item.put()));
+    if (FAILED(result) || !item) return result;
+
+    winrt::com_ptr<IShellItemArray> selection;
+    result = SHCreateShellItemArrayFromShellItem(
+        item.get(), IID_PPV_ARGS(selection.put()));
+    if (FAILED(result) || !selection) return result;
+
+    winrt::com_ptr<IObjectWithSelection> objectWithSelection;
+    result = executeCommand->QueryInterface(
+        IID_PPV_ARGS(objectWithSelection.put()));
+    if (FAILED(result) || !objectWithSelection) return result;
+    result = objectWithSelection->SetSelection(selection.get());
+    if (FAILED(result)) return result;
+
+    winrt::com_ptr<IObjectWithSite> objectWithSite;
+    if (shellBrowser &&
+        SUCCEEDED(executeCommand->QueryInterface(
+            IID_PPV_ARGS(objectWithSite.put()))) && objectWithSite) {
+        objectWithSite->SetSite(shellBrowser);
+    }
+
+    executeCommand->SetKeyState(0);
+    executeCommand->SetNoShowUI(FALSE);
+    std::wstring directory = path;
+    size_t separator = directory.find_last_of(L"\\/");
+    if (separator != std::wstring::npos) {
+        directory.resize(separator);
+        executeCommand->SetDirectory(directory.c_str());
+    }
+    POINT point{};
+    GetCursorPos(&point);
+    executeCommand->SetParameters(L"");
+    executeCommand->SetPosition(point);
+    executeCommand->SetShowWindow(SW_SHOWNORMAL);
+    return executeCommand->Execute();
+}
+
+HRESULT BetterPanelRemoveFavorite(std::wstring const& path) {
+    winrt::com_ptr<IShellItem> item;
+    HRESULT result = SHCreateItemFromParsingName(
+        path.c_str(), nullptr, IID_PPV_ARGS(item.put()));
+    if (FAILED(result) || !item) return result;
+
+    winrt::com_ptr<IApplicationDestinations> destinations;
+    result = CoCreateInstance(CLSID_ApplicationDestinations, nullptr,
+                              CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(destinations.put()));
+    if (FAILED(result) || !destinations) return result;
+    result = destinations->SetAppID(
+        L"Microsoft.Windows.Explorer_RecentFiles");
+    if (FAILED(result)) return result;
+    result = destinations->RemoveDestination(item.get());
+    if (SUCCEEDED(result)) {
+        // Removing a destination also removes it from Recent. Put it back as
+        // an ordinary unpinned recent item, matching Explorer's separation of
+        // Recent and Favorites.
+        SHAddToRecentDocs(SHARD_SHELLITEM, item.get());
+    }
+    return result;
+}
+
+void BetterPanelRunFavoriteAction(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::wstring const& path, bool removing) {
+    if (!state || path.empty()) return;
+    BetterPanelSetStatus(state->status,
+                         removing ? L"Removing from Favorites…"
+                                  : L"Adding to Favorites…");
+    auto dispatcher = state->dispatcher;
+    std::weak_ptr<BetterPanelState> weakState = state;
+    std::thread([weakState, dispatcher, path, removing]() {
+        HRESULT initialized = CoInitializeEx(nullptr,
+                                             COINIT_APARTMENTTHREADED);
+        HRESULT result = E_FAIL;
+        if (removing) {
+            result = BetterPanelRemoveFavorite(path);
+        } else {
+            // Explorer's native command first creates a current Recent Files
+            // destination, then pins that fresh entry.
+            SHAddToRecentDocs(SHARD_PATHW, path.c_str());
+            Sleep(150);
+            result = BetterPanelInvokeFavoriteCommand(path, nullptr);
+        }
+        if (SUCCEEDED(initialized)) CoUninitialize();
+        dispatcher.TryEnqueue([weakState, path, removing, result]() {
+            auto state = weakState.lock();
+            if (!state || state->unloaded || state->selectedPath != path) {
+                return;
+            }
+            if (SUCCEEDED(result)) {
+                BetterPanelQueueFavoriteCheck(state, path, true, !removing);
+            } else {
+                BetterPanelSetStatus(state->status,
+                                     L"Favorites action failed");
+            }
+        });
+    }).detach();
+}
+
+HRESULT BetterPanelInvokeLegacyFavoriteCommand(std::wstring const& path,
+                                               bool& removing,
+                                               HWND owner = nullptr) {
+    removing = false;
+    PIDLIST_ABSOLUTE absolutePidl = nullptr;
+    HRESULT result = SHParseDisplayName(path.c_str(), nullptr, &absolutePidl,
+                                        0, nullptr);
+    if (FAILED(result)) return result;
+
+    if (!owner) owner = GetForegroundWindow();
+    winrt::com_ptr<IShellFolder> parentFolder;
+    PCUITEMID_CHILD childPidl = nullptr;
+    result = SHBindToParent(absolutePidl, IID_PPV_ARGS(parentFolder.put()),
+                            &childPidl);
+    if (FAILED(result)) {
+        CoTaskMemFree(absolutePidl);
+        return result;
+    }
+
+    winrt::com_ptr<IContextMenu> contextMenu;
+    PCUITEMID_CHILD children[] = {childPidl};
+    result = parentFolder->GetUIObjectOf(
+        owner, 1, children, IID_IContextMenu, nullptr,
+        reinterpret_cast<void**>(contextMenu.put()));
+    if (FAILED(result)) {
+        CoTaskMemFree(absolutePidl);
+        return result;
+    }
+    winrt::com_ptr<IContextMenu3> contextMenu3;
+    contextMenu->QueryInterface(IID_PPV_ARGS(contextMenu3.put()));
+    winrt::com_ptr<IContextMenu2> contextMenu2;
+    if (!contextMenu3) {
+        contextMenu->QueryInterface(IID_PPV_ARGS(contextMenu2.put()));
+    }
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu) {
+        CoTaskMemFree(absolutePidl);
+        return E_OUTOFMEMORY;
+    }
+    result = contextMenu->QueryContextMenu(
+        menu, 0, 1, 0x7FFF,
+        CMF_NORMAL | CMF_EXPLORE | CMF_EXTENDEDVERBS |
+            CMF_SYNCCASCADEMENU);
+    UINT command = 0;
+    if (SUCCEEDED(result) && BetterPanelFindFavoriteMenuCommand(
+                                 menu, contextMenu.get(), contextMenu3.get(),
+                                 contextMenu2.get(), command, removing)) {
+        CMINVOKECOMMANDINFOEX invoke{sizeof(invoke)};
+        // Keep the context-menu object, PIDL, and menu alive until Explorer's
+        // native Favorites command has completed. ASYNCOK allowed those
+        // objects to be released while the operation was still pending.
+        invoke.fMask = CMIC_MASK_UNICODE;
+        invoke.hwnd = owner;
+        invoke.lpVerb = MAKEINTRESOURCEA(command - 1);
+        invoke.lpVerbW = MAKEINTRESOURCEW(command - 1);
+        invoke.nShow = SW_SHOWNORMAL;
+        result = contextMenu->InvokeCommand(
+            reinterpret_cast<LPCMINVOKECOMMANDINFO>(&invoke));
+    } else if (SUCCEEDED(result)) {
+        result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    }
+    DestroyMenu(menu);
+    CoTaskMemFree(absolutePidl);
+    return result;
+}
+
+HRESULT BetterPanelInvokeSelectedFavoriteCommand(
+    IShellBrowser* shellBrowser, bool& removing) {
+    removing = false;
+    if (!shellBrowser) return E_INVALIDARG;
+
+    winrt::com_ptr<IShellView> shellView;
+    HRESULT result = shellBrowser->QueryActiveShellView(shellView.put());
+    if (FAILED(result) || !shellView) return result;
+
+    HWND owner = nullptr;
+    shellView->GetWindow(&owner);
+
+    winrt::com_ptr<IContextMenu> contextMenu;
+    result = shellView->GetItemObject(
+        SVGIO_SELECTION, IID_IContextMenu,
+        reinterpret_cast<void**>(contextMenu.put()));
+    if (FAILED(result) || !contextMenu) return result;
+
+    winrt::com_ptr<IContextMenu3> contextMenu3;
+    contextMenu->QueryInterface(IID_PPV_ARGS(contextMenu3.put()));
+    winrt::com_ptr<IContextMenu2> contextMenu2;
+    if (!contextMenu3) {
+        contextMenu->QueryInterface(IID_PPV_ARGS(contextMenu2.put()));
+    }
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return E_OUTOFMEMORY;
+    result = contextMenu->QueryContextMenu(
+        menu, 0, 1, 0x7FFF,
+        CMF_NORMAL | CMF_EXPLORE | CMF_EXTENDEDVERBS |
+            CMF_SYNCCASCADEMENU);
+    UINT command = 0;
+    if (SUCCEEDED(result) && BetterPanelFindFavoriteMenuCommand(
+                                 menu, contextMenu.get(), contextMenu3.get(),
+                                 contextMenu2.get(), command, removing)) {
+        CMINVOKECOMMANDINFOEX invoke{sizeof(invoke)};
+        invoke.fMask = CMIC_MASK_UNICODE;
+        invoke.hwnd = owner;
+        invoke.lpVerb = MAKEINTRESOURCEA(command - 1);
+        invoke.lpVerbW = MAKEINTRESOURCEW(command - 1);
+        invoke.nShow = SW_SHOWNORMAL;
+        result = contextMenu->InvokeCommand(
+            reinterpret_cast<LPCMINVOKECOMMANDINFO>(&invoke));
+    } else if (SUCCEEDED(result)) {
+        result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    }
+    DestroyMenu(menu);
+    return result;
+}
+
 std::wstring BetterPanelQuoteCommandArgument(std::wstring_view value) {
     std::wstring quoted = L"\"";
     for (wchar_t character : value) {
@@ -4949,6 +5482,75 @@ winrt::fire_and_forget BetterPanelLoadFileIcon(
     }
 }
 
+winrt::fire_and_forget BetterPanelLoadOpenActionIcon(
+    std::weak_ptr<BetterPanelState> weakState,
+    std::wstring path) {
+    try {
+        auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+        // ListView requests the registered Shell/file-type artwork rather than
+        // a large content preview, matching the modern context-menu command.
+        auto thumbnail = co_await file.GetThumbnailAsync(
+            wsf::ThumbnailMode::ListView, 32,
+            wsf::ThumbnailOptions::UseCurrentScale);
+        if (!thumbnail) {
+            co_return;
+        }
+        winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap;
+        co_await bitmap.SetSourceAsync(thumbnail);
+        auto state = weakState.lock();
+        if (!state || state->selectedPath != path) {
+            co_return;
+        }
+        if (auto icon = state->openActionIcon.get()) {
+            icon.Source(bitmap);
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Open action icon error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
+winrt::fire_and_forget BetterPanelLoadHomeLocationIcon(
+    winrt::weak_ref<muxc::Image> weakImage,
+    winrt::weak_ref<muxc::FontIcon> weakFallback,
+    std::wstring path) {
+    try {
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            co_return;
+        }
+
+        wsf::StorageItemThumbnail thumbnail{nullptr};
+        if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
+            auto folder = co_await ws::StorageFolder::GetFolderFromPathAsync(path);
+            thumbnail = co_await folder.GetThumbnailAsync(
+                wsf::ThumbnailMode::ListView, 48,
+                wsf::ThumbnailOptions::UseCurrentScale);
+        } else {
+            auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+            thumbnail = co_await file.GetThumbnailAsync(
+                wsf::ThumbnailMode::ListView, 48,
+                wsf::ThumbnailOptions::UseCurrentScale);
+        }
+        if (!thumbnail) {
+            co_return;
+        }
+
+        winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap;
+        co_await bitmap.SetSourceAsync(thumbnail);
+        if (auto image = weakImage.get()) {
+            image.Source(bitmap);
+            image.Visibility(Visibility::Visible);
+            if (auto fallback = weakFallback.get()) {
+                fallback.Visibility(Visibility::Collapsed);
+            }
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Home Shell icon error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
 winrt::fire_and_forget BetterPanelLoadVideo(
     std::weak_ptr<BetterPanelState> weakState,
     std::wstring path) {
@@ -5300,6 +5902,79 @@ std::wstring BetterPanelKnownFolderPath(REFKNOWNFOLDERID id) {
     return path;
 }
 
+bool BetterPanelPathsEqual(std::wstring const& left,
+                           std::wstring const& right) {
+    if (left.empty() || right.empty()) return false;
+    std::wstring leftFull(MAX_PATH, L'\0');
+    std::wstring rightFull(MAX_PATH, L'\0');
+    DWORD leftLength = GetFullPathNameW(left.c_str(),
+                                        static_cast<DWORD>(leftFull.size()),
+                                        leftFull.data(), nullptr);
+    DWORD rightLength = GetFullPathNameW(right.c_str(),
+                                         static_cast<DWORD>(rightFull.size()),
+                                         rightFull.data(), nullptr);
+    if (!leftLength || leftLength >= leftFull.size() || !rightLength ||
+        rightLength >= rightFull.size()) {
+        return _wcsicmp(left.c_str(), right.c_str()) == 0;
+    }
+    leftFull.resize(leftLength);
+    rightFull.resize(rightLength);
+    while (leftFull.size() > 3 &&
+           (leftFull.back() == L'\\' || leftFull.back() == L'/')) {
+        leftFull.pop_back();
+    }
+    while (rightFull.size() > 3 &&
+           (rightFull.back() == L'\\' || rightFull.back() == L'/')) {
+        rightFull.pop_back();
+    }
+    return _wcsicmp(leftFull.c_str(), rightFull.c_str()) == 0;
+}
+
+bool BetterPanelIsProtectedDeleteLocation(std::wstring const& path) {
+    if (path.empty() || PathIsRootW(path.c_str())) return true;
+
+    static std::vector<std::wstring> const protectedFolders = [] {
+        std::vector<std::wstring> folders;
+        auto addKnownFolder = [&folders](REFKNOWNFOLDERID id) {
+            auto folder = BetterPanelKnownFolderPath(id);
+            if (!folder.empty()) folders.push_back(std::move(folder));
+        };
+        addKnownFolder(FOLDERID_Profile);
+        addKnownFolder(FOLDERID_Desktop);
+        addKnownFolder(FOLDERID_Documents);
+        addKnownFolder(FOLDERID_Downloads);
+        addKnownFolder(FOLDERID_Music);
+        addKnownFolder(FOLDERID_Pictures);
+        addKnownFolder(FOLDERID_Videos);
+        addKnownFolder(FOLDERID_Public);
+        addKnownFolder(FOLDERID_ProgramData);
+        addKnownFolder(FOLDERID_ProgramFiles);
+        addKnownFolder(FOLDERID_ProgramFilesX86);
+        addKnownFolder(FOLDERID_Windows);
+        addKnownFolder(FOLDERID_System);
+        addKnownFolder(FOLDERID_SystemX86);
+        return folders;
+    }();
+
+    return std::any_of(protectedFolders.begin(), protectedFolders.end(),
+                       [&path](auto const& protectedPath) {
+                           return BetterPanelPathsEqual(path, protectedPath);
+                       });
+}
+
+bool BetterPanelCanDeleteSelectedPath(std::wstring const& path) {
+    if (BetterPanelIsProtectedDeleteLocation(path)) return false;
+    winrt::com_ptr<IShellItem> item;
+    if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr,
+                                           IID_PPV_ARGS(item.put())))) {
+        return false;
+    }
+    SFGAOF attributes = SFGAO_CANDELETE | SFGAO_FILESYSTEM;
+    if (FAILED(item->GetAttributes(attributes, &attributes))) return false;
+    return (attributes & SFGAO_CANDELETE) != 0 &&
+           (attributes & SFGAO_FILESYSTEM) != 0;
+}
+
 std::vector<BetterPanelHomeLocation> BetterPanelRecentFolders() {
     struct LinkEntry {
         std::wstring path;
@@ -5364,6 +6039,112 @@ std::vector<BetterPanelHomeLocation> BetterPanelRecentFolders() {
     return folders;
 }
 
+std::vector<BetterPanelHomeLocation> BetterPanelFavoriteFiles() {
+    struct DestinationFile {
+        std::wstring path;
+        FILETIME modified{};
+    };
+    std::vector<DestinationFile> destinationFiles;
+    std::wstring explorerList = BetterPanelFavoritesListPath();
+    size_t separator = explorerList.find_last_of(L"\\/");
+    if (separator == std::wstring::npos) return {};
+    std::wstring directory = explorerList.substr(0, separator);
+
+    WIN32_FIND_DATAW findData{};
+    HANDLE find = FindFirstFileExW(
+        (directory + L"\\*.automaticDestinations-ms").c_str(),
+        FindExInfoBasic, &findData, FindExSearchNameMatch, nullptr,
+        FIND_FIRST_EX_LARGE_FETCH);
+    if (find == INVALID_HANDLE_VALUE) return {};
+    do {
+        if (!(findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            destinationFiles.push_back(
+                {directory + L"\\" + findData.cFileName,
+                 findData.ftLastWriteTime});
+        }
+    } while (FindNextFileW(find, &findData));
+    FindClose(find);
+    std::sort(destinationFiles.begin(), destinationFiles.end(),
+              [](auto const& left, auto const& right) {
+                  return CompareFileTime(&left.modified, &right.modified) > 0;
+              });
+
+    std::vector<BetterPanelHomeLocation> favorites;
+    std::unordered_set<std::wstring> seen;
+    for (auto const& destination : destinationFiles) {
+        if (favorites.size() >= 50) break;
+        winrt::com_ptr<IStorage> storage;
+        if (FAILED(StgOpenStorage(
+                destination.path.c_str(), nullptr,
+                STGM_READ | STGM_SHARE_DENY_WRITE, nullptr, 0,
+                storage.put())) || !storage) {
+            continue;
+        }
+        winrt::com_ptr<IStream> stream;
+        if (FAILED(storage->OpenStream(
+                L"DestList", nullptr, STGM_READ | STGM_SHARE_EXCLUSIVE,
+                0, stream.put())) || !stream) {
+            continue;
+        }
+        STATSTG stat{};
+        if (FAILED(stream->Stat(&stat, STATFLAG_NONAME)) ||
+            stat.cbSize.QuadPart < 32 ||
+            stat.cbSize.QuadPart > 16 * 1024 * 1024) {
+            continue;
+        }
+        std::vector<uint8_t> bytes(
+            static_cast<size_t>(stat.cbSize.QuadPart));
+        ULONG bytesRead = 0;
+        if (FAILED(stream->Read(bytes.data(),
+                                static_cast<ULONG>(bytes.size()),
+                                &bytesRead)) || bytesRead < 32) {
+            continue;
+        }
+        bytes.resize(bytesRead);
+        uint32_t version = BetterPanelReadUInt32(bytes, 0);
+        uint32_t entryCount = BetterPanelReadUInt32(bytes, 4);
+        if (version < 3 || entryCount > 10000) continue;
+
+        size_t offset = 32;
+        for (uint32_t index = 0;
+             index < entryCount && offset + 130 <= bytes.size(); index++) {
+            uint16_t pathLength = BetterPanelReadUInt16(bytes, offset + 128);
+            size_t pathBytes = static_cast<size_t>(pathLength) * 2;
+            if (offset + 130 + pathBytes > bytes.size()) break;
+            uint32_t pinStatus = BetterPanelReadUInt32(bytes, offset + 108);
+            if (pinStatus != UINT32_MAX && pathLength) {
+                std::wstring path;
+                path.reserve(pathLength);
+                for (uint16_t character = 0; character < pathLength;
+                     character++) {
+                    path.push_back(static_cast<wchar_t>(
+                        BetterPanelReadUInt16(
+                            bytes, offset + 130 +
+                                       static_cast<size_t>(character) * 2)));
+                }
+                DWORD attributes = GetFileAttributesW(path.c_str());
+                if (attributes != INVALID_FILE_ATTRIBUTES) {
+                    std::wstring key = path;
+                    std::transform(key.begin(), key.end(), key.begin(),
+                                   towlower);
+                    if (seen.insert(key).second) {
+                        std::wstring name = BetterPanelFileName(path);
+                        if (name.empty()) name = path;
+                        bool folder =
+                            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                        favorites.push_back(
+                            {std::move(name), path,
+                             folder ? L"\uE8B7" : L"\uE8A5"});
+                        if (favorites.size() >= 50) break;
+                    }
+                }
+            }
+            offset += 130 + pathBytes + 4;
+        }
+    }
+    return favorites;
+}
+
 void BetterPanelNavigateFromHome(
     std::weak_ptr<BetterPanelState> weakState,
     std::wstring target) {
@@ -5402,11 +6183,29 @@ muxc::Button BetterPanelMakeHomeLocationButton(
     content.ColumnDefinitions().Append(iconColumn);
     content.ColumnDefinitions().Append(textColumn);
 
-    muxc::FontIcon icon;
-    icon.Glyph(location.glyph);
-    icon.FontSize(20);
-    icon.VerticalAlignment(VerticalAlignment::Center);
-    content.Children().Append(icon);
+    muxc::Grid iconHost;
+    iconHost.Width(24);
+    iconHost.Height(24);
+    iconHost.HorizontalAlignment(HorizontalAlignment::Center);
+    iconHost.VerticalAlignment(VerticalAlignment::Center);
+
+    muxc::FontIcon fallbackIcon;
+    fallbackIcon.Glyph(location.glyph);
+    fallbackIcon.FontSize(20);
+    fallbackIcon.HorizontalAlignment(HorizontalAlignment::Center);
+    fallbackIcon.VerticalAlignment(VerticalAlignment::Center);
+    iconHost.Children().Append(fallbackIcon);
+
+    muxc::Image shellIcon;
+    shellIcon.Width(24);
+    shellIcon.Height(24);
+    shellIcon.Stretch(
+        winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
+    shellIcon.HorizontalAlignment(HorizontalAlignment::Center);
+    shellIcon.VerticalAlignment(VerticalAlignment::Center);
+    shellIcon.Visibility(Visibility::Collapsed);
+    iconHost.Children().Append(shellIcon);
+    content.Children().Append(iconHost);
 
     muxc::StackPanel labels;
     labels.Spacing(1);
@@ -5432,6 +6231,9 @@ muxc::Button BetterPanelMakeHomeLocationButton(
                                                      RoutedEventArgs const&) {
         BetterPanelNavigateFromHome(weakState, target);
     });
+    BetterPanelLoadHomeLocationIcon(winrt::make_weak(shellIcon),
+                                    winrt::make_weak(fallbackIcon),
+                                    location.path);
     return button;
 }
 
@@ -5442,23 +6244,42 @@ muxc::Button BetterPanelMakeDriveButton(std::wstring const& name,
                                          std::weak_ptr<BetterPanelState> weakState) {
     muxc::Grid content;
     muxc::ColumnDefinition iconColumn;
-    iconColumn.Width(GridLength{48, GridUnitType::Pixel});
+    iconColumn.Width(GridLength{52, GridUnitType::Pixel});
     muxc::ColumnDefinition detailsColumn;
     detailsColumn.Width(GridLength{1, GridUnitType::Star});
     content.ColumnDefinitions().Append(iconColumn);
     content.ColumnDefinitions().Append(detailsColumn);
 
-    muxc::FontIcon icon;
-    icon.Glyph(L"\uEDA2");
-    icon.FontSize(30);
-    icon.VerticalAlignment(VerticalAlignment::Center);
-    content.Children().Append(icon);
+    muxc::Grid iconHost;
+    iconHost.Width(44);
+    iconHost.Height(44);
+    iconHost.HorizontalAlignment(HorizontalAlignment::Center);
+    iconHost.VerticalAlignment(VerticalAlignment::Center);
+
+    muxc::FontIcon fallbackIcon;
+    fallbackIcon.Glyph(L"\uEDA2");
+    fallbackIcon.FontSize(30);
+    fallbackIcon.HorizontalAlignment(HorizontalAlignment::Center);
+    fallbackIcon.VerticalAlignment(VerticalAlignment::Center);
+    iconHost.Children().Append(fallbackIcon);
+
+    muxc::Image shellIcon;
+    shellIcon.Width(40);
+    shellIcon.Height(40);
+    shellIcon.Stretch(
+        winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
+    shellIcon.HorizontalAlignment(HorizontalAlignment::Center);
+    shellIcon.VerticalAlignment(VerticalAlignment::Center);
+    shellIcon.Visibility(Visibility::Collapsed);
+    iconHost.Children().Append(shellIcon);
+    content.Children().Append(iconHost);
 
     muxc::StackPanel details;
-    details.Spacing(3);
+    details.Spacing(1);
     muxc::Grid::SetColumn(details, 1);
     muxc::TextBlock title;
     title.Text(name);
+    title.FontSize(13);
     title.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
     title.TextTrimming(TextTrimming::CharacterEllipsis);
     details.Children().Append(title);
@@ -5471,7 +6292,7 @@ muxc::Button BetterPanelMakeDriveButton(std::wstring const& name,
                                    static_cast<double>(totalBytes)
                              : 0.0;
     capacity.Value(std::clamp(usedPercent, 0.0, 100.0));
-    capacity.Height(7);
+    capacity.Height(12);
     capacity.HorizontalAlignment(HorizontalAlignment::Stretch);
     details.Children().Append(capacity);
 
@@ -5480,7 +6301,7 @@ muxc::Button BetterPanelMakeDriveButton(std::wstring const& name,
                           ? BetterPanelFormatByteSize(freeBytes) + L" free of " +
                                 BetterPanelFormatByteSize(totalBytes)
                           : path);
-    capacityText.FontSize(10);
+    capacityText.FontSize(10.5);
     capacityText.Opacity(0.70);
     capacityText.TextTrimming(TextTrimming::CharacterEllipsis);
     details.Children().Append(capacityText);
@@ -5488,13 +6309,18 @@ muxc::Button BetterPanelMakeDriveButton(std::wstring const& name,
 
     auto button = BetterPanelMakeButton(L"");
     button.Content(content);
+    button.Background(nullptr);
+    button.BorderThickness(Thickness{0});
+    button.CornerRadius(CornerRadius{4});
     button.HorizontalContentAlignment(HorizontalAlignment::Stretch);
-    button.Padding(Thickness{10, 8, 10, 8});
-    button.MinHeight(72);
+    button.Padding(Thickness{6, 6, 8, 6});
+    button.MinHeight(64);
     button.Click([weakState, target = path](auto const&,
                                            RoutedEventArgs const&) {
         BetterPanelNavigateFromHome(weakState, target);
     });
+    BetterPanelLoadHomeLocationIcon(winrt::make_weak(shellIcon),
+                                    winrt::make_weak(fallbackIcon), path);
     return button;
 }
 
@@ -5503,6 +6329,9 @@ void BetterPanelPopulateHome(std::shared_ptr<BetterPanelState> const& state) {
     auto content = state->homeContent.get();
     if (!content) return;
     content.Children().Clear();
+
+    bool showFavorites =
+        Wh_GetIntValue(L"betterPanelHomeList", 0) == 1;
 
     muxc::TextBlock homeTitle;
     homeTitle.Text(L"This PC");
@@ -5513,7 +6342,8 @@ void BetterPanelPopulateHome(std::shared_ptr<BetterPanelState> const& state) {
     content.Children().Append(homeTitle);
 
     muxc::TextBlock homeSubtitle;
-    homeSubtitle.Text(L"Drives and recent locations");
+    homeSubtitle.Text(showFavorites ? L"Drives and favorite files"
+                                    : L"Drives and recent locations");
     homeSubtitle.FontSize(11);
     homeSubtitle.Opacity(0.66);
     homeSubtitle.Margin(Thickness{2, 0, 0, 8});
@@ -5531,8 +6361,8 @@ void BetterPanelPopulateHome(std::shared_ptr<BetterPanelState> const& state) {
         drivesTitle.Margin(Thickness{2, 0, 0, 2});
         content.Children().Append(drivesTitle);
         muxc::Grid drivesGrid;
-        drivesGrid.ColumnSpacing(8);
-        drivesGrid.RowSpacing(8);
+        drivesGrid.ColumnSpacing(12);
+        drivesGrid.RowSpacing(4);
         muxc::ColumnDefinition leftDriveColumn;
         leftDriveColumn.Width(GridLength{1, GridUnitType::Star});
         muxc::ColumnDefinition rightDriveColumn;
@@ -5570,20 +6400,73 @@ void BetterPanelPopulateHome(std::shared_ptr<BetterPanelState> const& state) {
         content.Children().Append(drivesGrid);
     }
 
-    auto recent = BetterPanelRecentFolders();
-    if (!recent.empty()) {
-        muxc::TextBlock recentTitle;
-        recentTitle.Text(L"Recent folders");
-        recentTitle.FontSize(14);
-        recentTitle.FontWeight(
-            winrt::Microsoft::UI::Text::FontWeights::SemiBold());
-        recentTitle.Margin(Thickness{2, 10, 0, 2});
-        content.Children().Append(recentTitle);
-        for (auto const& location : recent) {
+    muxc::StackPanel listSwitch;
+    listSwitch.Orientation(muxc::Orientation::Horizontal);
+    listSwitch.Spacing(6);
+    listSwitch.Margin(Thickness{2, 10, 0, 3});
+    auto makeSwitchButton =
+        [state, showFavorites](PCWSTR label, PCWSTR glyph,
+                               bool favoritesView) {
+            muxp::ToggleButton button;
+            muxc::StackPanel buttonContent;
+            buttonContent.Orientation(muxc::Orientation::Horizontal);
+            buttonContent.Spacing(6);
+            muxc::FontIcon icon;
+            icon.Glyph(glyph);
+            icon.FontSize(13);
+            buttonContent.Children().Append(icon);
+            muxc::TextBlock text;
+            text.Text(label);
+            text.FontSize(12);
+            buttonContent.Children().Append(text);
+            button.Content(buttonContent);
+            button.MinWidth(92);
+            button.Height(32);
+            button.Padding(Thickness{10, 4, 10, 4});
+            bool selected = showFavorites == favoritesView;
+            button.IsChecked(selected);
+            button.IsHitTestVisible(!selected);
+            std::weak_ptr<BetterPanelState> weakState = state;
+            button.Click([weakState, favoritesView](auto const&,
+                                                    RoutedEventArgs const&) {
+                Wh_SetIntValue(L"betterPanelHomeList",
+                               favoritesView ? 1 : 0);
+                if (auto state = weakState.lock();
+                    state && !state->unloaded) {
+                    state->homeContentLoaded = false;
+                    auto dispatcher = state->dispatcher;
+                    dispatcher.TryEnqueue([weakState]() {
+                        if (auto state = weakState.lock();
+                            state && !state->unloaded) {
+                            BetterPanelPopulateHome(state);
+                        }
+                    });
+                }
+            });
+            return button;
+        };
+    listSwitch.Children().Append(
+        makeSwitchButton(L"Recent", L"\uE823", false));
+    listSwitch.Children().Append(
+        makeSwitchButton(L"Favorites", L"\uE734", true));
+    content.Children().Append(listSwitch);
+
+    auto locations = showFavorites ? BetterPanelFavoriteFiles()
+                                   : BetterPanelRecentFolders();
+    if (!locations.empty()) {
+        for (auto const& location : locations) {
             content.Children().Append(
                 BetterPanelMakeHomeLocationButton(
                     location, std::weak_ptr<BetterPanelState>(state)));
         }
+    } else {
+        muxc::TextBlock emptyText;
+        emptyText.Text(showFavorites ? L"No favorite files yet"
+                                     : L"No recent folders yet");
+        emptyText.FontSize(12);
+        emptyText.Opacity(0.65);
+        emptyText.Margin(Thickness{2, 6, 0, 0});
+        content.Children().Append(emptyText);
     }
     state->homeContentLoaded = true;
 }
@@ -7160,12 +8043,16 @@ void BetterPanelEnsureShareActions(
     }
 
     auto weakStatus = state->status;
-    muxc::StackPanel row;
+    muxc::Grid row;
     row.Name(L"BetterDetailPanelShareActions");
-    row.Orientation(muxc::Orientation::Horizontal);
-    row.Spacing(6);
-    row.HorizontalAlignment(HorizontalAlignment::Left);
+    row.HorizontalAlignment(HorizontalAlignment::Stretch);
     row.Margin(share.Margin());
+    muxc::ColumnDefinition primaryActionsColumn;
+    primaryActionsColumn.Width(GridLength{1, GridUnitType::Star});
+    muxc::ColumnDefinition deleteActionColumn;
+    deleteActionColumn.Width(GridLength{1, GridUnitType::Auto});
+    row.ColumnDefinitions().Append(primaryActionsColumn);
+    row.ColumnDefinitions().Append(deleteActionColumn);
     muxc::Grid::SetRow(row, muxc::Grid::GetRow(share));
     muxc::Grid::SetColumn(row, muxc::Grid::GetColumn(share));
     muxc::Grid::SetRowSpan(row, muxc::Grid::GetRowSpan(share));
@@ -7176,14 +8063,70 @@ void BetterPanelEnsureShareActions(
     state->nativeShareIndex = shareIndex;
     state->nativeShareMargin = share.Margin();
 
+    // Use Explorer's own Share control as the visual and sizing reference for
+    // the primary file actions and the compact overlay controls. Clear the
+    // fixed width used by the previous test build before measuring Explorer's
+    // natural Share width.
+    share.ClearValue(FrameworkElement::WidthProperty());
+    share.UpdateLayout();
+    double primaryActionWidth = share.ActualWidth();
+    if (primaryActionWidth < 1) primaryActionWidth = 80;
+    auto nativeActionStyle = share.Style();
+    auto applyNativeButtonVisual = [&](muxc::Button const& button) {
+        button.Style(nativeActionStyle);
+        button.Background(share.Background());
+        button.BorderBrush(share.BorderBrush());
+        button.BorderThickness(share.BorderThickness());
+        auto cornerRadius = share.CornerRadius();
+        if (cornerRadius.TopLeft <= 0 && cornerRadius.TopRight <= 0 &&
+            cornerRadius.BottomRight <= 0 && cornerRadius.BottomLeft <= 0) {
+            cornerRadius = CornerRadius{4};
+        }
+        button.CornerRadius(cornerRadius);
+    };
+    if (auto expand = state->previewExpandButton.get()) {
+        applyNativeButtonVisual(expand);
+    }
+    if (auto expand = state->gifExpandButton.get()) {
+        applyNativeButtonVisual(expand);
+    }
+
     share.Margin(Thickness{0, 0, 0, 0});
     parent.Children().RemoveAt(shareIndex);
-    row.Children().Append(share);
+
+    auto primaryActions = BetterPanelMakeRow();
+    primaryActions.HorizontalAlignment(HorizontalAlignment::Left);
+    primaryActions.Children().Append(share);
+    row.Children().Append(primaryActions);
+
+    auto actionIconBrush =
+        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(
+            winrt::Windows::UI::ColorHelper::FromArgb(255, 64, 200, 255));
 
     double shareHeight = share.ActualHeight();
     if (shareHeight < 1) shareHeight = 30;
 
     auto openButton = BetterPanelMakeIconButton(L"Open", L"\uE8E5");
+    applyNativeButtonVisual(openButton);
+    openButton.Width(primaryActionWidth);
+    openButton.Padding(Thickness{6, 4, 6, 4});
+    if (auto content = openButton.Content().try_as<muxc::StackPanel>()) {
+        content.Spacing(4);
+        if (content.Children().Size() > 0) {
+            content.Children().RemoveAt(0);
+        }
+        muxc::Image openActionIcon;
+        openActionIcon.Width(16);
+        openActionIcon.Height(16);
+        openActionIcon.Stretch(
+            winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
+        state->openActionIcon = winrt::make_weak(openActionIcon);
+        content.Children().InsertAt(0, openActionIcon);
+    }
+    if (!state->selectedPath.empty()) {
+        BetterPanelLoadOpenActionIcon(
+            std::weak_ptr<BetterPanelState>(state), state->selectedPath);
+    }
     openButton.Height(shareHeight);
     state->openButton = winrt::make_weak(openButton);
     openButton.Click(
@@ -7196,9 +8139,41 @@ void BetterPanelEnsureShareActions(
             BetterPanelSetStatus(weakStatus,
                                  result > 32 ? L"" : L"Open failed");
         });
-    row.Children().Append(openButton);
+    primaryActions.Children().Append(openButton);
 
     auto openWithButton = BetterPanelMakeIconButton(L"Open with", L"\uE7AC");
+    applyNativeButtonVisual(openWithButton);
+    openWithButton.Width(primaryActionWidth + 12);
+    openWithButton.Padding(Thickness{6, 4, 6, 4});
+    if (auto content = openWithButton.Content().try_as<muxc::StackPanel>()) {
+        content.Spacing(4);
+        if (content.Children().Size() > 0) {
+            content.Children().RemoveAt(0);
+        }
+        muxc::Grid openWithIcon;
+        openWithIcon.Width(16);
+        openWithIcon.Height(16);
+        muxc::FontIcon openWithBase;
+        openWithBase.Glyph(L"\uE7AC");
+        openWithBase.FontSize(13);
+        openWithBase.Foreground(share.Foreground());
+        openWithIcon.Children().Append(openWithBase);
+        muxc::Border openWithAccent;
+        openWithAccent.Width(5);
+        openWithAccent.Height(5);
+        openWithAccent.CornerRadius(CornerRadius{2.5});
+        openWithAccent.Background(actionIconBrush);
+        openWithAccent.HorizontalAlignment(HorizontalAlignment::Left);
+        openWithAccent.VerticalAlignment(VerticalAlignment::Bottom);
+        openWithAccent.Margin(Thickness{0, 0, 0, 1});
+        openWithIcon.Children().Append(openWithAccent);
+        content.Children().InsertAt(0, openWithIcon);
+        if (content.Children().Size() > 1) {
+            if (auto text = content.Children().GetAt(1).try_as<muxc::TextBlock>()) {
+                text.FontSize(11);
+            }
+        }
+    }
     openWithButton.Height(shareHeight);
     state->openWithButton = winrt::make_weak(openWithButton);
     openWithButton.Click(
@@ -7214,26 +8189,56 @@ void BetterPanelEnsureShareActions(
             BetterPanelSetStatus(weakStatus,
                                  SUCCEEDED(hr) ? L"" : L"Open With failed");
         });
-    row.Children().Append(openWithButton);
+    primaryActions.Children().Append(openWithButton);
 
-    auto printButton = BetterPanelMakeIconButton(L"Print", L"\uE749");
-    printButton.Height(shareHeight);
-    printButton.Visibility(Visibility::Collapsed);
-    state->printButton = winrt::make_weak(printButton);
-    printButton.Click(
-        [weakStatus](winrt::Windows::Foundation::IInspectable const&,
-                     RoutedEventArgs const&) {
-            auto path = BetterPanelGetSelectedPath();
-            if (path.empty()) {
-                BetterPanelSetStatus(weakStatus, L"Select one file first");
+    auto singleDeleteButton = BetterPanelMakeButton(L"");
+    muxc::FontIcon singleDeleteIcon;
+    singleDeleteIcon.Glyph(L"\uE74D");
+    singleDeleteIcon.FontSize(13);
+    singleDeleteButton.Content(singleDeleteIcon);
+    singleDeleteButton.Width(32);
+    singleDeleteButton.Height(shareHeight);
+    singleDeleteButton.MinHeight(shareHeight);
+    singleDeleteButton.Padding(Thickness{0, 0, 0, 0});
+    singleDeleteButton.Margin(Thickness{18, 0, 0, 0});
+    singleDeleteButton.HorizontalAlignment(HorizontalAlignment::Right);
+    singleDeleteButton.Visibility(Visibility::Collapsed);
+    muxc::Grid::SetColumn(singleDeleteButton, 1);
+    muxa::AutomationProperties::SetName(singleDeleteButton,
+                                        L"Move selected item to Recycle Bin");
+    muxc::ToolTipService::SetToolTip(
+        singleDeleteButton, winrt::box_value(L"Move to Recycle Bin"));
+    state->singleDeleteButton = winrt::make_weak(singleDeleteButton);
+    std::weak_ptr<BetterPanelState> weakDeleteState = state;
+    singleDeleteButton.Click(
+        [weakDeleteState, weakStatus](
+            winrt::Windows::Foundation::IInspectable const&,
+            RoutedEventArgs const&) {
+            auto state = weakDeleteState.lock();
+            if (!state || state->selectedPath.empty() ||
+                BetterPanelIsProtectedDeleteLocation(state->selectedPath)) {
                 return;
             }
-            BetterPanelSetStatus(
-                weakStatus,
-                BetterPanelPrintFile(path) ? L"Print opened"
-                                           : L"Printing is unavailable for this file type");
+            std::vector<std::wstring> sources{state->selectedPath};
+            if (state->timer) state->timer.Stop();
+            bool queued = state->dispatcher.TryEnqueue(
+                [weakDeleteState, weakStatus,
+                 sources = std::move(sources)]() {
+                    HRESULT result = BetterPanelDeleteItems(sources);
+                    if (auto state = weakDeleteState.lock();
+                        state && !state->unloaded) {
+                        BetterPanelSetStatus(
+                            weakStatus,
+                            SUCCEEDED(result) ? L"Moved to Recycle Bin"
+                                              : L"Delete cancelled");
+                        state->transferLastScanTick = 0;
+                        if (state->timer) state->timer.Start();
+                        BetterPanelRefresh(state);
+                    }
+                });
+            if (!queued && state->timer) state->timer.Start();
         });
-    row.Children().Append(printButton);
+    row.Children().Append(singleDeleteButton);
 
     auto extractButton = BetterPanelMakeIconButton(L"Extract", L"\uE8B7");
     extractButton.Height(shareHeight);
@@ -7260,7 +8265,7 @@ void BetterPanelEnsureShareActions(
                 BetterPanelSetStatus(weakStatus, L"");
             }
         });
-    row.Children().Append(extractButton);
+    primaryActions.Children().Append(extractButton);
 
     if (auto actionsHost = state->actionsHost.get()) {
         actionsHost.Children().Append(row);
@@ -7352,6 +8357,16 @@ void BetterPanelBeginRename(std::shared_ptr<BetterPanelState> const& state,
     }
 
     std::wstring filename = BetterPanelFileName(state->selectedPath);
+    if (!audio) {
+        double availableWidth = 320;
+        if (auto panel = state->panel.get(); panel && panel.ActualWidth() > 80) {
+            availableWidth = panel.ActualWidth() - 24;
+        }
+        double editWidth = std::clamp(title.ActualWidth() + 38, 160.0,
+                                      std::max(160.0, availableWidth));
+        edit.MaxWidth(std::max(160.0, availableWidth));
+        edit.Width(editWidth);
+    }
     edit.Text(filename);
     title.Visibility(Visibility::Collapsed);
     pencil.Visibility(Visibility::Collapsed);
@@ -7522,11 +8537,25 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
     }
     if (auto shareActionRow = state->shareActionRow.get()) {
+        bool canDeleteSingleSelection =
+            activeSelection.size() == 1 && !isMultiSelection && !isHome &&
+            !isDriveRoot && BetterPanelCanDeleteSelectedPath(path);
         BetterPanelSetVisibilityIfChanged(
             shareActionRow,
-            (isMultiSelection || isHome || isDriveRoot || path.empty())
+            (isMultiSelection || isHome || isDriveRoot || path.empty() ||
+             (isDirectory && !canDeleteSingleSelection))
                                 ? Visibility::Collapsed
                                 : Visibility::Visible);
+        if (auto shareButton = state->nativeShareButton.get()) {
+            BetterPanelSetVisibilityIfChanged(
+                shareButton, isDirectory ? Visibility::Collapsed
+                                         : Visibility::Visible);
+        }
+        if (auto deleteButton = state->singleDeleteButton.get()) {
+            BetterPanelSetVisibilityIfChanged(
+                deleteButton, canDeleteSingleSelection ? Visibility::Visible
+                                                       : Visibility::Collapsed);
+        }
     }
 
     auto nativeInfoBanner = state->nativeInfoBanner.get();
@@ -7634,6 +8663,13 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             extractButton, isArchive && !isMultiSelection
                                ? Visibility::Visible
                                : Visibility::Collapsed);
+    }
+    if (auto favoriteButton = state->favoriteButton.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            favoriteButton,
+            !isMultiSelection && !path.empty() && !isDirectory && !isDriveRoot
+                ? Visibility::Visible
+                : Visibility::Collapsed);
     }
     if (auto printButton = state->printButton.get()) {
         if (state->printHandlerPath != path) {
@@ -7800,6 +8836,16 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             BetterPanelStopStateMedia(state, previousPath);
         }
         state->selectedPath = path;
+        ++state->favoriteCheckGeneration;
+        state->favoriteCheckPending = false;
+        state->favoriteStatePath.clear();
+        state->favoriteStateKnown = false;
+        state->favoritePinned = false;
+        BetterPanelApplyFavoriteVisual(state);
+        if (!path.empty() && !isDirectory && !isMultiSelection &&
+            !isDriveRoot) {
+            BetterPanelQueueFavoriteCheck(state, path);
+        }
         if (auto driveContent = state->driveContent.get()) {
             driveContent.Children().Clear();
         }
@@ -7872,6 +8918,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
         if (!path.empty() && !isMultiSelection) {
             BetterPanelLoadFileIcon(state, path);
+            BetterPanelLoadOpenActionIcon(state, path);
             BetterPanelLoadInsights(state, path);
         }
         if (isVideo) {
@@ -7960,31 +9007,38 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
         winrt::Microsoft::UI::Text::FontWeights::SemiBold());
     fileTitle.VerticalAlignment(VerticalAlignment::Center);
     state->fileTitle = winrt::make_weak(fileTitle);
-    fileTitleRow.Children().Append(fileTitle);
 
-    auto filePencil = BetterPanelMakeButton(L"");
-    muxc::FontIcon filePencilIcon;
-    filePencilIcon.Glyph(L"\uE70F");
-    filePencilIcon.FontSize(12);
-    filePencil.Content(filePencilIcon);
-    filePencil.Width(28);
-    filePencil.Height(28);
-    filePencil.MinHeight(28);
-    filePencil.Padding(Thickness{0, 0, 0, 0});
-    filePencil.CornerRadius(CornerRadius{4});
-    filePencil.Margin(Thickness{2, 0, 0, 0});
-    state->fileRenameButton = winrt::make_weak(filePencil);
-    fileTitleRow.Children().Append(filePencil);
+    auto fileTitleButton = BetterPanelMakeButton(L"");
+    fileTitleButton.Content(fileTitle);
+    fileTitleButton.MinHeight(28);
+    fileTitleButton.Padding(Thickness{4, 2, 4, 2});
+    fileTitleButton.Margin(Thickness{-4, 0, 0, 0});
+    fileTitleButton.HorizontalAlignment(HorizontalAlignment::Left);
+    fileTitleButton.Background(
+        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(
+            winrt::Windows::UI::Colors::Transparent()));
+    fileTitleButton.BorderThickness(Thickness{0});
+    fileTitleButton.CornerRadius(CornerRadius{4});
+    muxa::AutomationProperties::SetName(fileTitleButton,
+                                        L"Rename selected file");
+    muxc::ToolTipService::SetToolTip(fileTitleButton,
+                                    winrt::box_value(L"Click to rename"));
+    state->fileRenameButton = winrt::make_weak(fileTitleButton);
+    fileTitleRow.Children().Append(fileTitleButton);
 
     muxc::TextBox fileRenameBox;
     fileRenameBox.Visibility(Visibility::Collapsed);
     fileRenameBox.VerticalAlignment(VerticalAlignment::Center);
-    fileRenameBox.Width(host.ActualWidth() > 160 ? host.ActualWidth() - 40
-                                                  : 320);
+    fileRenameBox.HorizontalAlignment(HorizontalAlignment::Left);
+    fileRenameBox.Width(240);
+    fileRenameBox.Height(34);
+    fileRenameBox.MinHeight(34);
+    fileRenameBox.MaxWidth(host.ActualWidth() > 160 ? host.ActualWidth() - 40
+                                                    : 320);
     state->fileRenameBox = winrt::make_weak(fileRenameBox);
     fileTitleRow.Children().Append(fileRenameBox);
     std::weak_ptr<BetterPanelState> weakRenameState = state;
-    filePencil.Click(
+    fileTitleButton.Click(
         [weakRenameState](winrt::Windows::Foundation::IInspectable const&,
                           RoutedEventArgs const&) {
             if (auto state = weakRenameState.lock()) {
@@ -8261,10 +9315,71 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
 
     panelControls.Children().Append(utilityButtons);
 
+    auto rightUtilityActions = BetterPanelMakeRow();
+    rightUtilityActions.HorizontalAlignment(HorizontalAlignment::Right);
+    muxc::Grid::SetColumn(rightUtilityActions, 2);
+
+    auto favoriteButton = BetterPanelMakeButton(L"");
+    muxc::FontIcon favoriteIcon;
+    favoriteIcon.Glyph(L"\uE734");
+    favoriteIcon.FontSize(14);
+    favoriteButton.Content(favoriteIcon);
+    favoriteButton.Width(32);
+    favoriteButton.Height(32);
+    favoriteButton.MinWidth(32);
+    favoriteButton.MinHeight(32);
+    favoriteButton.Padding(Thickness{0, 0, 0, 0});
+    favoriteButton.Visibility(Visibility::Collapsed);
+    muxa::AutomationProperties::SetName(favoriteButton,
+                                        L"Add to Favorites");
+    muxc::ToolTipService::SetToolTip(
+        favoriteButton, winrt::box_value(L"Add to Favorites"));
+    state->favoriteButton = winrt::make_weak(favoriteButton);
+    favoriteButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state || state->selectedPath.empty()) return;
+            BetterPanelRunFavoriteAction(
+                state, state->selectedPath,
+                state->favoriteStateKnown && state->favoritePinned);
+        });
+    rightUtilityActions.Children().Append(favoriteButton);
+
+    auto printButton = BetterPanelMakeButton(L"");
+    muxc::FontIcon printIcon;
+    printIcon.Glyph(L"\uE749");
+    printIcon.FontSize(13);
+    printButton.Content(printIcon);
+    printButton.Width(32);
+    printButton.Height(32);
+    printButton.MinHeight(32);
+    printButton.Padding(Thickness{0, 0, 0, 0});
+    printButton.Visibility(Visibility::Collapsed);
+    muxa::AutomationProperties::SetName(printButton, L"Print selected file");
+    muxc::ToolTipService::SetToolTip(printButton,
+                                    winrt::box_value(L"Print"));
+    state->printButton = winrt::make_weak(printButton);
+    auto weakPrintStatus = state->status;
+    printButton.Click(
+        [weakPrintStatus](winrt::Windows::Foundation::IInspectable const&,
+                          RoutedEventArgs const&) {
+            auto path = BetterPanelGetSelectedPath();
+            if (path.empty()) {
+                BetterPanelSetStatus(weakPrintStatus,
+                                     L"Select one file first");
+                return;
+            }
+            BetterPanelSetStatus(
+                weakPrintStatus,
+                BetterPanelPrintFile(path)
+                    ? L"Print opened"
+                    : L"Printing is unavailable for this file type");
+        });
+    rightUtilityActions.Children().Append(printButton);
+
     auto quickAudioControls = BetterPanelMakeRow();
     quickAudioControls.Visibility(Visibility::Collapsed);
-    quickAudioControls.HorizontalAlignment(HorizontalAlignment::Right);
-    muxc::Grid::SetColumn(quickAudioControls, 2);
     state->quickAudioControls =
         winrt::make_weak(quickAudioControls.as<FrameworkElement>());
 
@@ -8295,7 +9410,8 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     });
     quickAudioControls.Children().Append(quickPlay);
 
-    panelControls.Children().Append(quickAudioControls);
+    rightUtilityActions.Children().Append(quickAudioControls);
+    panelControls.Children().Append(rightUtilityActions);
 
     panelUtilities.Children().Append(panelControls);
 
@@ -8318,12 +9434,14 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
         expandButton.Content(expandIcon);
         expandButton.Width(36);
         expandButton.Height(36);
+        expandButton.MinWidth(36);
+        expandButton.MinHeight(36);
         expandButton.Padding(Thickness{0, 0, 0, 0});
-        expandButton.CornerRadius(CornerRadius{4});
         expandButton.HorizontalAlignment(HorizontalAlignment::Right);
         expandButton.VerticalAlignment(VerticalAlignment::Bottom);
         expandButton.Margin(Thickness{0, 0, 10, 10});
         muxc::Canvas::SetZIndex(expandButton, 100);
+        state->previewExpandButton = winrt::make_weak(expandButton);
         std::weak_ptr<BetterPanelState> weakPreviewState = state;
         auto weakExpandIcon = winrt::make_weak(expandIcon);
         expandButton.Click(
@@ -8365,12 +9483,14 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     gifExpandButton.Content(gifExpandIcon);
     gifExpandButton.Width(36);
     gifExpandButton.Height(36);
+    gifExpandButton.MinWidth(36);
+    gifExpandButton.MinHeight(36);
     gifExpandButton.Padding(Thickness{0, 0, 0, 0});
-    gifExpandButton.CornerRadius(CornerRadius{4});
     gifExpandButton.HorizontalAlignment(HorizontalAlignment::Right);
     gifExpandButton.VerticalAlignment(VerticalAlignment::Bottom);
     gifExpandButton.Margin(Thickness{0, 0, 10, 10});
     muxc::Canvas::SetZIndex(gifExpandButton, 100);
+    state->gifExpandButton = winrt::make_weak(gifExpandButton);
     auto weakGifExpandIcon = winrt::make_weak(gifExpandIcon);
     gifExpandButton.Click(
         [weakState, weakGifExpandIcon](
@@ -9133,9 +10253,13 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
 
     muxc::StackPanel actionsHost;
     actionsHost.Name(L"BetterDetailPanelInlineActionsHost");
-    actionsHost.HorizontalAlignment(HorizontalAlignment::Left);
+    actionsHost.HorizontalAlignment(HorizontalAlignment::Stretch);
     state->actionsHost = winrt::make_weak(actionsHost);
     panel.Children().Append(actionsHost);
+
+    // Keep destination actions in the natural viewport immediately below the
+    // normal action buttons instead of after Details and Metadata.
+    panel.Children().Append(transferRow);
 
     muxc::Border homeCard;
     homeCard.Name(L"BetterDetailPanelHomeCard");
@@ -9202,8 +10326,14 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     copyDetailsButton.Content(copyDetailsIcon);
     copyDetailsButton.Width(32);
     copyDetailsButton.Height(32);
+    copyDetailsButton.MinWidth(32);
+    copyDetailsButton.MinHeight(32);
     copyDetailsButton.Padding(Thickness{0, 0, 0, 0});
-    copyDetailsButton.Margin(Thickness{6, 0, 0, 0});
+    // The Details card has 10 px of inner padding. Extend only this utility
+    // button through that inset so its right edge matches Print and Delete.
+    copyDetailsButton.Margin(Thickness{6, 0, -10, 0});
+    copyDetailsButton.HorizontalAlignment(HorizontalAlignment::Right);
+    copyDetailsButton.VerticalAlignment(VerticalAlignment::Center);
     muxc::Grid::SetColumn(copyDetailsButton, 1);
     muxa::AutomationProperties::SetName(copyDetailsButton,
                                         L"Copy all details");
@@ -9464,7 +10594,6 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     metadataCard.Child(metadataShell);
     panel.Children().Append(metadataCard);
 
-    panel.Children().Append(transferRow);
     panel.Children().Append(multiActionRow);
     host.Children().Append(panel);
 
@@ -9652,9 +10781,14 @@ void RemoveBetterDetailPanelsForCurrentThread() {
         auto shareParent = state->nativeShareParent.get();
         auto shareRow = state->shareActionRow.get();
         if (share && shareParent && shareRow) {
-            uint32_t shareInRow = 0;
-            if (shareRow.Children().IndexOf(share, shareInRow)) {
-                shareRow.Children().RemoveAt(shareInRow);
+            auto shareContainer = winrt::Microsoft::UI::Xaml::Media::
+                VisualTreeHelper::GetParent(share).try_as<muxc::Panel>();
+            if (shareContainer) {
+                uint32_t shareInContainer = 0;
+                if (shareContainer.Children().IndexOf(
+                        share, shareInContainer)) {
+                    shareContainer.Children().RemoveAt(shareInContainer);
+                }
             }
             auto currentParent = winrt::Microsoft::UI::Xaml::Media::
                 VisualTreeHelper::GetParent(shareRow).try_as<muxc::Panel>();
