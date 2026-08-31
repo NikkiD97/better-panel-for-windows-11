@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         2.1.2-beta.2
+// @version         2.1.2-beta.3
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -10,6 +10,72 @@
 // @compilerOptions -lcomctl32 -ldwmapi -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -lbcrypt
 // @license         GPL-3.0-or-later
 // ==/WindhawkMod==
+
+// ==WindhawkModSettings==
+/*
+- hoverAnimation:
+  - style: windows
+    $name: Hover style
+    $description: "Default: Windows default. Adds motion when the pointer moves over any Better Panel button, including Home cards and Details rows. None removes added motion while keeping native Windows color feedback."
+    $options:
+    - windows: Windows default
+    - none: None
+    - scale: Gentle scale
+    - lift: Lift
+    - tilt: Tilt
+    - spring: Spring
+  $name: Hover animation
+  $description: Choose how Better Panel controls respond when the pointer moves over them.
+- clickAnimation:
+  - style: windows
+    $name: Click style
+    $description: "Default: Windows default. Adds motion after mouse, touch, pen, or keyboard activation. None removes added motion while keeping the button's native Windows response."
+    $options:
+    - windows: Windows default
+    - none: None
+    - press: Press and release
+    - pulse: Pulse
+    - bounce: Bounce
+    - flash: Flash
+    - shake: Shake
+    - spring: Spring
+    - spin: Spin
+    - squash: Squash
+    - wobble: Wobble
+  $name: Click animation
+  $description: Choose how every Better Panel button moves when activated.
+- buttonLayout:
+  - mode: native
+    $name: Layout mode
+    $description: "Default: Reset to defaults. Restores Better Panel's tested native button dimensions. Choose Custom to use the values below."
+    $options:
+    - native: Reset to defaults
+    - custom: Custom
+  - horizontalMargin: 0
+    $name: Horizontal margin
+    $description: "Default: 0 px. Range: -20 to 40 px. Space added to the left and right of each button. Custom mode only."
+  - verticalMargin: 0
+    $name: Vertical margin
+    $description: "Default: 0 px. Range: -20 to 40 px. Space added above and below each button. Custom mode only."
+  - horizontalPadding: 10
+    $name: Horizontal padding
+    $description: "Default: 10 px. Range: 0 to 40 px. Space between a labeled button's content and its left and right edges. Custom mode only."
+  - verticalPadding: 4
+    $name: Vertical padding
+    $description: "Default: 4 px. Range: 0 to 30 px. Space between a labeled button's content and its top and bottom edges. Custom mode only."
+  - minimumWidth: 0
+    $name: Minimum button width
+    $description: "Default: 0 px. Range: 0 to 240 px. Minimum width for labeled buttons; zero keeps their natural width. Custom mode only."
+  - minimumHeight: 32
+    $name: Minimum button height
+    $description: "Default: 32 px. Range: 24 to 80 px. Minimum height for labeled buttons. Custom mode only."
+  - iconButtonSize: 32
+    $name: Icon-only button size
+    $description: "Default: 32 px. Range: 15 to 64 px. Width and height for compact icon-only buttons; the audio speed button keeps enough width for its text. Custom mode only."
+  $name: Button layout
+  $description: Customize Better Panel button spacing and dimensions, or return everything to the native defaults.
+*/
+// ==/WindhawkModSettings==
 
 // Copyright (C) 2026 Nicole S
 //
@@ -51,7 +117,7 @@ current build does not support ARM64 or Windows 10. Because Better Panel uses
 Explorer's private WinUI Details-pane structure, Windows updates can require
 mod changes even on an otherwise compatible Windows release.
 
-**Version 2.1.2-beta.2 is a beta release.** Better Panel now discovers the
+**Version 2.1.2-beta.3 is a beta release.** Better Panel now discovers the
 Details pane through Explorer lifecycle hooks instead of occupying Explorer's
 single XAML Diagnostics connection. It should therefore be able to run beside
 Windows 11 File Explorer Styler. This has been confirmed on the tested Windows
@@ -116,6 +182,15 @@ Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 2.1.2-beta.3
+
+* Added a circular loading indicator for slower systems.
+* Added settings for button margins, padding, height, width, and icon size.
+* Added optional hover and click animations.
+* Settings update live and can be reset to default.
+* Buttons now use Explorer's style.
+* Home and the Details pane now load faster.
 
 ### 2.1.2-beta.2
 
@@ -1491,11 +1566,46 @@ enum class XamlDiagnosticsHandling {
     kAllow,
 };
 
+enum class BetterPanelHoverAnimation {
+    WindowsDefault,
+    None,
+    Scale,
+    Lift,
+    Tilt,
+    Spring,
+};
+
+enum class BetterPanelClickAnimation {
+    WindowsDefault,
+    None,
+    Press,
+    Pulse,
+    Bounce,
+    Flash,
+    Shake,
+    Spring,
+    Spin,
+    Squash,
+    Wobble,
+};
+
 struct {
     std::optional<BackgroundTranslucentEffect> backgroundTranslucentEffect;
     BackgroundTranslucentEffectRegion backgroundTranslucentEffectRegion;
     int explorerFrameContainerHeight;
     XamlDiagnosticsHandling xamlDiagnosticsHandling;
+    bool customButtonLayout = false;
+    int buttonHorizontalMargin = 0;
+    int buttonVerticalMargin = 0;
+    int buttonHorizontalPadding = 10;
+    int buttonVerticalPadding = 4;
+    int buttonMinimumWidth = 0;
+    int buttonMinimumHeight = 32;
+    int iconButtonSize = 32;
+    BetterPanelHoverAnimation hoverAnimation =
+        BetterPanelHoverAnimation::WindowsDefault;
+    BetterPanelClickAnimation clickAnimation =
+        BetterPanelClickAnimation::WindowsDefault;
 } g_settings;
 
 BackgroundTranslucentEffect g_themeBackgroundTranslucentEffect;
@@ -2495,6 +2605,7 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::Button> pdfNextButton;
     winrt::weak_ref<muxc::Button> favoriteButton;
     winrt::weak_ref<muxc::Button> printButton;
+    Style nativeButtonStyle{nullptr};
     winrt::weak_ref<muxc::StackPanel> rootPanel;
     winrt::weak_ref<muxc::StackPanel> actionsHost;
     winrt::weak_ref<FrameworkElement> panelUtilities;
@@ -2587,6 +2698,15 @@ struct BetterPanelState {
     bool metadataDirty = false;
     bool suppressMetadataChanged = false;
     bool metadataCollapsed = false;
+    struct AnimationHandlerRegistration {
+        winrt::weak_ref<muxp::ButtonBase> button;
+        winrt::event_token pointerEntered{};
+        winrt::event_token pointerExited{};
+        winrt::event_token click{};
+    };
+    std::unordered_map<void*, AnimationHandlerRegistration>
+        animationHandlersInstalled;
+    std::unordered_map<void*, muc::SpriteVisual> animationFlashOverlays;
     std::atomic_uint64_t insightsGeneration{0};
     ULONGLONG transferLastScanTick = 0;
     HWND transferCachedActiveTab = nullptr;
@@ -2608,6 +2728,7 @@ struct BetterPanelState {
     bool displayedPlaybackInitialized = false;
     bool mediaTimerRunning = false;
     bool interactiveRefreshQueued = false;
+    winrt::event_token hostUnloadedToken{};
     bool homeContentLoaded = false;
     bool homeWasVisible = false;
     std::wstring archivePreviewPath;
@@ -2624,6 +2745,461 @@ bool g_betterMediaMuted = false;
 double g_betterPlaybackRate = 1.0;
 bool g_betterRepeatEnabled = false;
 bool g_betterShuffleEnabled = false;
+
+bool BetterPanelPlayBrightFlash(
+    std::shared_ptr<BetterPanelState> const& state,
+    UIElement const& element,
+    std::chrono::milliseconds duration) {
+    if (!state || !element) return false;
+
+    try {
+        void* identity = winrt::get_abi(element);
+        muc::SpriteVisual overlay{nullptr};
+        if (auto existing = state->animationFlashOverlays.find(identity);
+            existing != state->animationFlashOverlays.end()) {
+            overlay = existing->second;
+        } else {
+            auto currentChild =
+                muxh::ElementCompositionPreview::GetElementChildVisual(
+                    element);
+            if (currentChild) {
+                // Never replace or reparent a visual owned by Explorer.
+                // The caller will provide a safe transform fallback.
+                return false;
+            }
+            auto visual = muxh::ElementCompositionPreview::GetElementVisual(
+                element);
+            auto compositor = visual.Compositor();
+            overlay = compositor.CreateSpriteVisual();
+            overlay.Brush(compositor.CreateColorBrush(
+                winrt::Windows::UI::ColorHelper::FromArgb(
+                    255, 255, 255, 255)));
+            overlay.Opacity(0.0f);
+            muxh::ElementCompositionPreview::SetElementChildVisual(
+                element, overlay);
+            state->animationFlashOverlays.emplace(identity, overlay);
+        }
+
+        overlay.Size(element.ActualSize());
+        overlay.Opacity(0.0f);
+        auto animation = overlay.Compositor().CreateScalarKeyFrameAnimation();
+        animation.Duration(duration);
+        animation.InsertKeyFrame(0.0f, 0.0f);
+        animation.InsertKeyFrame(0.22f, 0.62f);
+        animation.InsertKeyFrame(0.48f, 0.34f);
+        animation.InsertKeyFrame(1.0f, 0.0f);
+        overlay.StartAnimation(L"Opacity", animation);
+        return true;
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Flash animation error %08X: %s", ex.code(),
+               ex.message().c_str());
+        return false;
+    }
+}
+
+void BetterPanelSetAnimationRestState(
+                                      std::shared_ptr<BetterPanelState> const& state,
+                                      UIElement const& element,
+                                      bool pointerOver) {
+    if (!element) return;
+
+    try {
+        auto visual = muxh::ElementCompositionPreview::GetElementVisual(
+            element);
+        auto compositor = visual.Compositor();
+        visual.CenterPoint({element.ActualSize().x / 2,
+                            element.ActualSize().y / 2, 0.0f});
+
+        auto animateVector = [&](wchar_t const* property,
+                                 winrt::Windows::Foundation::Numerics::float3
+                                     from,
+                                 winrt::Windows::Foundation::Numerics::float3
+                                     to) {
+            auto animation = compositor.CreateVector3KeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(140));
+            auto easing = compositor.CreateCubicBezierEasingFunction(
+                {0.1f, 0.9f}, {0.2f, 1.0f});
+            animation.InsertKeyFrame(0.0f, from);
+            animation.InsertKeyFrame(1.0f, to, easing);
+            visual.StartAnimation(property, animation);
+        };
+        auto animateScalar = [&](wchar_t const* property, float from,
+                                 float to) {
+            auto animation = compositor.CreateScalarKeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(140));
+            auto easing = compositor.CreateCubicBezierEasingFunction(
+                {0.1f, 0.9f}, {0.2f, 1.0f});
+            animation.InsertKeyFrame(0.0f, from);
+            animation.InsertKeyFrame(1.0f, to, easing);
+            visual.StartAnimation(property, animation);
+        };
+
+        auto targetScale = winrt::Windows::Foundation::Numerics::float3{
+            1.0f, 1.0f, 1.0f};
+        float targetOpacity = 1.0f;
+        float targetRotation = 0.0f;
+        auto targetTranslation =
+            winrt::Windows::Foundation::Numerics::float3{0.0f, 0.0f, 0.0f};
+
+        if (pointerOver) {
+            switch (g_settings.hoverAnimation) {
+                case BetterPanelHoverAnimation::Scale:
+                    targetScale = {1.07f, 1.07f, 1.0f};
+                    break;
+                case BetterPanelHoverAnimation::Lift:
+                    targetTranslation = {0.0f, -3.0f, 0.0f};
+                    break;
+                case BetterPanelHoverAnimation::Tilt:
+                    targetRotation = -2.0f;
+                    break;
+                case BetterPanelHoverAnimation::Spring:
+                    targetScale = {1.08f, 1.08f, 1.0f};
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        auto currentScale = visual.Scale();
+        float currentOpacity = visual.Opacity();
+        float currentRotation = visual.RotationAngleInDegrees();
+        visual.Scale(targetScale);
+        visual.Opacity(targetOpacity);
+        visual.RotationAngleInDegrees(targetRotation);
+
+        Vector3Transition translationTransition;
+        translationTransition.Duration(std::chrono::milliseconds(140));
+        element.TranslationTransition(translationTransition);
+        element.Translation(targetTranslation);
+
+        animateVector(L"Scale", currentScale, targetScale);
+        animateScalar(L"Opacity", currentOpacity, targetOpacity);
+        animateScalar(L"RotationAngleInDegrees", currentRotation,
+                      targetRotation);
+
+        if (pointerOver &&
+                   g_settings.hoverAnimation ==
+                       BetterPanelHoverAnimation::Spring) {
+            auto spring = compositor.CreateVector3KeyFrameAnimation();
+            spring.Duration(std::chrono::milliseconds(380));
+            spring.InsertKeyFrame(0.0f, {1.0f, 1.0f, 1.0f});
+            spring.InsertKeyFrame(0.32f, {1.11f, 1.11f, 1.0f});
+            spring.InsertKeyFrame(0.58f, {1.04f, 1.04f, 1.0f});
+            spring.InsertKeyFrame(0.78f, {1.09f, 1.09f, 1.0f});
+            spring.InsertKeyFrame(1.0f, {1.08f, 1.08f, 1.0f});
+            visual.StartAnimation(L"Scale", spring);
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Hover animation error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
+void BetterPanelPlayClickAnimation(
+                                   std::shared_ptr<BetterPanelState> const& state,
+                                   UIElement const& element,
+                                   bool pointerOver) {
+    if (!element ||
+        g_settings.clickAnimation ==
+            BetterPanelClickAnimation::WindowsDefault ||
+        g_settings.clickAnimation == BetterPanelClickAnimation::None) {
+        return;
+    }
+
+    try {
+        auto visual = muxh::ElementCompositionPreview::GetElementVisual(
+            element);
+        auto compositor = visual.Compositor();
+        visual.CenterPoint({element.ActualSize().x / 2,
+                            element.ActualSize().y / 2, 0.0f});
+
+        float restScale = pointerOver &&
+                                  g_settings.hoverAnimation ==
+                                      BetterPanelHoverAnimation::Scale
+                              ? 1.07f
+                              : 1.0f;
+        float restOpacity = 1.0f;
+        float restRotation = pointerOver &&
+                                     g_settings.hoverAnimation ==
+                                         BetterPanelHoverAnimation::Tilt
+                                 ? -2.0f
+                                 : 0.0f;
+
+        if (g_settings.clickAnimation == BetterPanelClickAnimation::Press ||
+            g_settings.clickAnimation == BetterPanelClickAnimation::Pulse) {
+            auto animation = compositor.CreateVector3KeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(220));
+            animation.InsertKeyFrame(
+                0.0f, {restScale, restScale, 1.0f});
+            animation.InsertKeyFrame(
+                0.35f,
+                g_settings.clickAnimation == BetterPanelClickAnimation::Press
+                    ? winrt::Windows::Foundation::Numerics::float3{
+                          0.86f, 0.86f, 1.0f}
+                    : winrt::Windows::Foundation::Numerics::float3{
+                          1.14f, 1.14f, 1.0f});
+            animation.InsertKeyFrame(
+                1.0f, {restScale, restScale, 1.0f});
+            visual.StartAnimation(L"Scale", animation);
+        } else if (g_settings.clickAnimation ==
+                   BetterPanelClickAnimation::Bounce) {
+            auto base = visual.Offset();
+            auto animation = compositor.CreateVector3KeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(330));
+            animation.InsertKeyFrame(0.0f, base);
+            animation.InsertKeyFrame(
+                0.28f, {base.x, base.y + 7.0f, base.z});
+            animation.InsertKeyFrame(
+                0.62f, {base.x, base.y - 5.0f, base.z});
+            animation.InsertKeyFrame(1.0f, base);
+            visual.StartAnimation(L"Offset", animation);
+        } else if (g_settings.clickAnimation ==
+                   BetterPanelClickAnimation::Flash) {
+            if (!BetterPanelPlayBrightFlash(
+                    state, element, std::chrono::milliseconds(320))) {
+                auto fallback = compositor.CreateVector3KeyFrameAnimation();
+                fallback.Duration(std::chrono::milliseconds(280));
+                fallback.InsertKeyFrame(
+                    0.0f, {restScale, restScale, 1.0f});
+                fallback.InsertKeyFrame(0.30f, {1.16f, 1.16f, 1.0f});
+                fallback.InsertKeyFrame(
+                    1.0f, {restScale, restScale, 1.0f});
+                visual.StartAnimation(L"Scale", fallback);
+            }
+        } else if (g_settings.clickAnimation ==
+                   BetterPanelClickAnimation::Shake) {
+            auto animation = compositor.CreateScalarKeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(300));
+            animation.InsertKeyFrame(0.0f, restRotation);
+            animation.InsertKeyFrame(0.22f, -6.0f);
+            animation.InsertKeyFrame(0.48f, 6.0f);
+            animation.InsertKeyFrame(0.74f, -3.0f);
+            animation.InsertKeyFrame(1.0f, restRotation);
+            visual.StartAnimation(L"RotationAngleInDegrees", animation);
+        } else if (g_settings.clickAnimation ==
+                   BetterPanelClickAnimation::Spring) {
+            auto animation = compositor.CreateVector3KeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(430));
+            animation.InsertKeyFrame(0.0f, {0.84f, 0.84f, 1.0f});
+            animation.InsertKeyFrame(0.30f, {1.15f, 1.15f, 1.0f});
+            animation.InsertKeyFrame(0.55f, {0.96f, 0.96f, 1.0f});
+            animation.InsertKeyFrame(0.76f, {1.07f, 1.07f, 1.0f});
+            animation.InsertKeyFrame(
+                1.0f, {restScale, restScale, 1.0f});
+            visual.StartAnimation(L"Scale", animation);
+        } else if (g_settings.clickAnimation ==
+                   BetterPanelClickAnimation::Spin) {
+            auto animation = compositor.CreateScalarKeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(360));
+            animation.InsertKeyFrame(0.0f, restRotation);
+            animation.InsertKeyFrame(1.0f, restRotation + 360.0f);
+            visual.StartAnimation(L"RotationAngleInDegrees", animation);
+        } else if (g_settings.clickAnimation ==
+                   BetterPanelClickAnimation::Squash) {
+            auto animation = compositor.CreateVector3KeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(260));
+            animation.InsertKeyFrame(
+                0.0f, {restScale, restScale, 1.0f});
+            animation.InsertKeyFrame(0.36f, {1.16f, 0.78f, 1.0f});
+            animation.InsertKeyFrame(
+                1.0f, {restScale, restScale, 1.0f});
+            visual.StartAnimation(L"Scale", animation);
+        } else if (g_settings.clickAnimation ==
+                   BetterPanelClickAnimation::Wobble) {
+            auto animation = compositor.CreateScalarKeyFrameAnimation();
+            animation.Duration(std::chrono::milliseconds(380));
+            animation.InsertKeyFrame(0.0f, restRotation);
+            animation.InsertKeyFrame(0.20f, -7.0f);
+            animation.InsertKeyFrame(0.43f, 6.0f);
+            animation.InsertKeyFrame(0.66f, -4.0f);
+            animation.InsertKeyFrame(0.84f, 2.0f);
+            animation.InsertKeyFrame(1.0f, restRotation);
+            visual.StartAnimation(L"RotationAngleInDegrees", animation);
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Button animation error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
+void BetterPanelRemoveAnimationHandlers(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state) return;
+
+    for (auto const& [identity, registration] :
+         state->animationHandlersInstalled) {
+        try {
+            if (auto button = registration.button.get()) {
+                if (registration.pointerEntered.value) {
+                    button.PointerEntered(registration.pointerEntered);
+                }
+                if (registration.pointerExited.value) {
+                    button.PointerExited(registration.pointerExited);
+                }
+                if (registration.click.value) {
+                    button.Click(registration.click);
+                }
+                if (auto overlay = state->animationFlashOverlays.find(identity);
+                    overlay != state->animationFlashOverlays.end()) {
+                    auto child = muxh::ElementCompositionPreview::
+                        GetElementChildVisual(button);
+                    if (child == overlay->second) {
+                        muxh::ElementCompositionPreview::SetElementChildVisual(
+                            button, nullptr);
+                    }
+                }
+            }
+        } catch (...) {
+            Wh_Log(L"Animation handler cleanup error %08X",
+                   winrt::to_hresult().value);
+        }
+    }
+    state->animationHandlersInstalled.clear();
+    state->animationFlashOverlays.clear();
+}
+
+void BetterPanelDetachHostUnloadedHandler(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state || !state->hostUnloadedToken.value) return;
+    try {
+        if (auto host = state->host.get()) {
+            host.Unloaded(state->hostUnloadedToken);
+        }
+    } catch (...) {
+        Wh_Log(L"Host unload cleanup error %08X", winrt::to_hresult().value);
+    }
+    state->hostUnloadedToken = {};
+}
+
+void BetterPanelInstallAnimationHandlers(
+    std::shared_ptr<BetterPanelState> const& state,
+    muxp::ButtonBase const& button) {
+    if (!state || !button) return;
+
+    void* identity = winrt::get_abi(button);
+    if (auto existing = state->animationHandlersInstalled.find(identity);
+        existing != state->animationHandlersInstalled.end()) {
+        if (auto installedButton = existing->second.button.get();
+            installedButton == button) {
+            BetterPanelSetAnimationRestState(state, button,
+                                              button.IsPointerOver());
+            return;
+        }
+        state->animationHandlersInstalled.erase(existing);
+    }
+
+    auto weakButton = winrt::make_weak(button);
+    std::weak_ptr<BetterPanelState> weakState = state;
+    BetterPanelState::AnimationHandlerRegistration registration;
+    registration.button = weakButton;
+    registration.pointerEntered = button.PointerEntered(
+        [weakButton, weakState](
+                     winrt::Windows::Foundation::IInspectable const&,
+                     winrt::Microsoft::UI::Xaml::Input::
+                         PointerRoutedEventArgs const&) {
+            if (auto element = weakButton.get(); element) {
+                if (auto state = weakState.lock()) {
+                    BetterPanelSetAnimationRestState(state, element, true);
+                }
+            }
+        });
+    registration.pointerExited = button.PointerExited(
+        [weakButton, weakState](
+                     winrt::Windows::Foundation::IInspectable const&,
+                     winrt::Microsoft::UI::Xaml::Input::
+                         PointerRoutedEventArgs const&) {
+            if (auto element = weakButton.get(); element) {
+                if (auto state = weakState.lock()) {
+                    BetterPanelSetAnimationRestState(state, element, false);
+                }
+            }
+        });
+
+    registration.click = button.Click([weakButton, weakState](
+                     winrt::Windows::Foundation::IInspectable const&,
+                     RoutedEventArgs const&) {
+        if (auto element = weakButton.get(); element) {
+            if (auto state = weakState.lock()) {
+                BetterPanelPlayClickAnimation(
+                    state, element, element.IsPointerOver());
+            }
+        }
+    });
+    state->animationHandlersInstalled.emplace(identity,
+                                               std::move(registration));
+    BetterPanelSetAnimationRestState(state, button, button.IsPointerOver());
+}
+
+void BetterPanelApplyNativeButtonStyle(
+    std::shared_ptr<BetterPanelState> const& state,
+    DependencyObject const& root) {
+    if (!state || !root) return;
+
+    if (auto buttonBase = root.try_as<muxp::ButtonBase>()) {
+        BetterPanelInstallAnimationHandlers(state, buttonBase);
+    }
+
+    if (auto button = root.try_as<muxc::Button>()) {
+        if (state->nativeButtonStyle &&
+            button.Style() != state->nativeButtonStyle) {
+            button.Style(state->nativeButtonStyle);
+        }
+        if (g_settings.customButtonLayout) {
+            button.Margin(Thickness{
+                static_cast<double>(g_settings.buttonHorizontalMargin),
+                static_cast<double>(g_settings.buttonVerticalMargin),
+                static_cast<double>(g_settings.buttonHorizontalMargin),
+                static_cast<double>(g_settings.buttonVerticalMargin)});
+            auto content = button.Content();
+            bool iconOnly = content &&
+                (content.try_as<muxc::FontIcon>() ||
+                 content.try_as<muxc::Image>());
+            bool playbackSpeed =
+                state->playbackSpeedButton.get() == button;
+            if (iconOnly || playbackSpeed) {
+                double size = g_settings.iconButtonSize;
+                double width = playbackSpeed ? std::max(34.0, size) : size;
+                button.Width(width);
+                button.Height(size);
+                button.MinWidth(width);
+                button.MinHeight(size);
+                button.Padding(playbackSpeed ? Thickness{2, 0, 2, 0}
+                                             : Thickness{0});
+            } else {
+                button.MinWidth(g_settings.buttonMinimumWidth);
+                button.MinHeight(g_settings.buttonMinimumHeight);
+                button.Padding(Thickness{
+                    static_cast<double>(g_settings.buttonHorizontalPadding),
+                    static_cast<double>(g_settings.buttonVerticalPadding),
+                    static_cast<double>(g_settings.buttonHorizontalPadding),
+                    static_cast<double>(g_settings.buttonVerticalPadding)});
+            }
+        }
+    } else if (auto button = root.try_as<muxp::ToggleButton>();
+               button && g_settings.customButtonLayout) {
+        button.Margin(Thickness{
+            static_cast<double>(g_settings.buttonHorizontalMargin),
+            static_cast<double>(g_settings.buttonVerticalMargin),
+            static_cast<double>(g_settings.buttonHorizontalMargin),
+            static_cast<double>(g_settings.buttonVerticalMargin)});
+        button.MinWidth(g_settings.buttonMinimumWidth);
+        button.MinHeight(g_settings.buttonMinimumHeight);
+        button.Padding(Thickness{
+            static_cast<double>(g_settings.buttonHorizontalPadding),
+            static_cast<double>(g_settings.buttonVerticalPadding),
+            static_cast<double>(g_settings.buttonHorizontalPadding),
+            static_cast<double>(g_settings.buttonVerticalPadding)});
+    }
+
+    int childCount = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
+        GetChildrenCount(root);
+    for (int index = 0; index < childCount; index++) {
+        BetterPanelApplyNativeButtonStyle(
+            state,
+            winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetChild(
+                root, index));
+    }
+}
 
 std::optional<bool> BetterPanelReadFavoriteState(std::wstring const& path);
 void BetterPanelSetStatus(winrt::weak_ref<muxc::TextBlock> weakStatus,
@@ -8072,6 +8648,7 @@ void BetterPanelEnsureShareActions(
     double primaryActionWidth = share.ActualWidth();
     if (primaryActionWidth < 1) primaryActionWidth = 80;
     auto nativeActionStyle = share.Style();
+    state->nativeButtonStyle = nativeActionStyle;
     auto applyNativeButtonVisual = [&](muxc::Button const& button) {
         button.Style(nativeActionStyle);
         button.Background(share.Background());
@@ -8086,9 +8663,11 @@ void BetterPanelEnsureShareActions(
     };
     if (auto expand = state->previewExpandButton.get()) {
         applyNativeButtonVisual(expand);
+        BetterPanelApplyNativeButtonStyle(state, expand);
     }
     if (auto expand = state->gifExpandButton.get()) {
         applyNativeButtonVisual(expand);
+        BetterPanelApplyNativeButtonStyle(state, expand);
     }
 
     share.Margin(Thickness{0, 0, 0, 0});
@@ -8273,6 +8852,9 @@ void BetterPanelEnsureShareActions(
         parent.Children().InsertAt(shareIndex, row);
     }
     state->shareActionRow = winrt::make_weak(row);
+    if (auto panel = state->panel.get()) {
+        BetterPanelApplyNativeButtonStyle(state, panel);
+    }
 }
 
 void BetterPanelEndRename(std::shared_ptr<BetterPanelState> const& state,
@@ -8947,10 +9529,13 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
     }
 
+    if (auto panel = state->panel.get()) {
+        BetterPanelApplyNativeButtonStyle(state, panel);
+    }
     BetterPanelRefreshPlaybackState(state);
 }
 
-void TryInstallBetterDetailPanel(FrameworkElement element) {
+void BetterPanelInstallDetailPanel(FrameworkElement element) {
     if (element.Name() != L"DetailsViewThumbnail") {
         return;
     }
@@ -10624,7 +11209,7 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     BetterPanelRefresh(state);
     timer.Start();
 
-    host.Unloaded(
+    state->hostUnloadedToken = host.Unloaded(
         [weakState](winrt::Windows::Foundation::IInspectable const&,
                     RoutedEventArgs const&) {
             auto state = weakState.lock();
@@ -10632,6 +11217,7 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
                 return;
             }
             state->unloaded = true;
+            BetterPanelDetachHostUnloadedHandler(state);
             state->insightsGeneration.fetch_add(1, std::memory_order_relaxed);
             if (state->timer) {
                 state->timer.Stop();
@@ -10643,6 +11229,7 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
             if (state->videoControlsTimer) {
                 state->videoControlsTimer.Stop();
             }
+            BetterPanelRemoveAnimationHandlers(state);
             BetterPanelStopStateMedia(state);
             BetterPanelUnwatchNativeDetailsVisibility(state);
 
@@ -10654,6 +11241,54 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
     std::lock_guard lock(g_betterPanelMutex);
     g_betterPanels.push_back(std::move(state));
     Wh_Log(L"Better Detail Panel 0.5 added");
+}
+
+void TryInstallBetterDetailPanel(FrameworkElement element) {
+    if (element.Name() != L"DetailsViewThumbnail") return;
+
+    auto host = element.try_as<muxc::StackPanel>();
+    if (!host) return;
+    for (auto const& child : host.Children()) {
+        if (auto frameworkElement = child.try_as<FrameworkElement>();
+            frameworkElement &&
+            (frameworkElement.Name() == L"BetterDetailPanelRoot" ||
+             frameworkElement.Name() == L"BetterDetailPanelLoading")) {
+            return;
+        }
+    }
+
+    muxc::StackPanel loadingHost;
+    loadingHost.Name(L"BetterDetailPanelLoading");
+    loadingHost.HorizontalAlignment(HorizontalAlignment::Stretch);
+    loadingHost.Margin(Thickness{16, 28, 16, 18});
+
+    muxc::ProgressRing loadingRing;
+    loadingRing.Width(28);
+    loadingRing.Height(28);
+    loadingRing.IsActive(true);
+    loadingRing.HorizontalAlignment(HorizontalAlignment::Center);
+    muxa::AutomationProperties::SetName(loadingRing,
+                                        L"Loading Better Panel");
+    loadingHost.Children().Append(loadingRing);
+    host.Children().Append(loadingHost);
+
+    auto weakHost = winrt::make_weak(host);
+    auto weakLoadingHost = winrt::make_weak(loadingHost);
+    auto install = [weakHost, weakLoadingHost]() {
+        auto host = weakHost.get();
+        if (!host) return;
+        if (auto loadingHost = weakLoadingHost.get()) {
+            uint32_t index = 0;
+            if (host.Children().IndexOf(loadingHost, index)) {
+                host.Children().RemoveAt(index);
+            }
+        }
+        BetterPanelInstallDetailPanel(host);
+    };
+    if (!host.DispatcherQueue().TryEnqueue(
+            mud::DispatcherQueuePriority::Low, install)) {
+        install();
+    }
 }
 
 // Diagnostics-free discovery. Explorer Command Bar demonstrated that a typed
@@ -10752,6 +11387,9 @@ void RemoveBetterDetailPanelsForCurrentThread() {
             continue;
         }
 
+        state->unloaded = true;
+        BetterPanelDetachHostUnloadedHandler(state);
+
         if (state->timer) {
             state->timer.Stop();
         }
@@ -10762,12 +11400,23 @@ void RemoveBetterDetailPanelsForCurrentThread() {
         if (state->videoControlsTimer) {
             state->videoControlsTimer.Stop();
         }
+        BetterPanelRemoveAnimationHandlers(state);
         BetterPanelStopStateMedia(state);
         if (state->previewExpanded) {
             BetterPanelSetInlinePreviewExpanded(state, false);
         }
         if (auto nativeTitle = state->nativeTitleContainer.get()) {
             nativeTitle.Visibility(state->nativeTitleVisibility);
+        }
+        if (auto expand = state->previewExpandButton.get()) {
+            auto expandParent = winrt::Microsoft::UI::Xaml::Media::
+                VisualTreeHelper::GetParent(expand).try_as<muxc::Panel>();
+            if (expandParent) {
+                uint32_t expandIndex = 0;
+                if (expandParent.Children().IndexOf(expand, expandIndex)) {
+                    expandParent.Children().RemoveAt(expandIndex);
+                }
+            }
         }
         auto host = state->host.get();
         auto panel = state->panel.get();
@@ -16318,6 +16967,36 @@ void OnWindowCreated(HWND hWnd, PCSTR funcName) {
     }
 }
 
+void BetterPanelApplyButtonSettingsForCurrentThread() {
+    std::vector<std::shared_ptr<BetterPanelState>> states;
+    {
+        std::lock_guard lock(g_betterPanelMutex);
+        for (auto const& state : g_betterPanels) {
+            if (state && state->dispatcher &&
+                state->dispatcher.HasThreadAccess() && !state->unloaded) {
+                states.push_back(state);
+            }
+        }
+    }
+
+    for (auto const& state : states) {
+        try {
+            if (auto panel = state->panel.get()) {
+                BetterPanelApplyNativeButtonStyle(state, panel);
+            }
+            if (auto expand = state->previewExpandButton.get()) {
+                BetterPanelApplyNativeButtonStyle(state, expand);
+            }
+        } catch (winrt::hresult_error const& ex) {
+            Wh_Log(L"Live button settings error %08X: %s", ex.code(),
+                   ex.message().c_str());
+        } catch (...) {
+            Wh_Log(L"Live button settings error %08X",
+                   winrt::to_hresult().value);
+        }
+    }
+}
+
 using CreateWindowExW_t = decltype(&CreateWindowExW);
 CreateWindowExW_t CreateWindowExW_Original;
 HWND WINAPI CreateWindowExW_Hook(DWORD dwExStyle,
@@ -17032,6 +17711,66 @@ void LoadSettings() {
     // Kept only for dormant legacy diagnostics code. Better Panel 2.0 doesn't
     // install that hook or occupy Explorer's XAML Diagnostics connection.
     g_settings.xamlDiagnosticsHandling = XamlDiagnosticsHandling::kAllow;
+
+    PCWSTR buttonLayoutMode =
+        Wh_GetStringSetting(L"buttonLayout.mode");
+    g_settings.customButtonLayout =
+        buttonLayoutMode && wcscmp(buttonLayoutMode, L"custom") == 0;
+    Wh_FreeStringSetting(buttonLayoutMode);
+    g_settings.buttonHorizontalMargin = std::clamp(
+        Wh_GetIntSetting(L"buttonLayout.horizontalMargin"), -20, 40);
+    g_settings.buttonVerticalMargin = std::clamp(
+        Wh_GetIntSetting(L"buttonLayout.verticalMargin"), -20, 40);
+    g_settings.buttonHorizontalPadding = std::clamp(
+        Wh_GetIntSetting(L"buttonLayout.horizontalPadding"), 0, 40);
+    g_settings.buttonVerticalPadding = std::clamp(
+        Wh_GetIntSetting(L"buttonLayout.verticalPadding"), 0, 30);
+    g_settings.buttonMinimumWidth = std::clamp(
+        Wh_GetIntSetting(L"buttonLayout.minimumWidth"), 0, 240);
+    g_settings.buttonMinimumHeight = std::clamp(
+        Wh_GetIntSetting(L"buttonLayout.minimumHeight"), 24, 80);
+    g_settings.iconButtonSize = std::clamp(
+        Wh_GetIntSetting(L"buttonLayout.iconButtonSize"), 15, 64);
+
+    PCWSTR hoverAnimation = Wh_GetStringSetting(L"hoverAnimation.style");
+    g_settings.hoverAnimation = BetterPanelHoverAnimation::WindowsDefault;
+    if (hoverAnimation && wcscmp(hoverAnimation, L"none") == 0) {
+        g_settings.hoverAnimation = BetterPanelHoverAnimation::None;
+    } else if (hoverAnimation && wcscmp(hoverAnimation, L"scale") == 0) {
+        g_settings.hoverAnimation = BetterPanelHoverAnimation::Scale;
+    } else if (hoverAnimation && wcscmp(hoverAnimation, L"lift") == 0) {
+        g_settings.hoverAnimation = BetterPanelHoverAnimation::Lift;
+    } else if (hoverAnimation && wcscmp(hoverAnimation, L"tilt") == 0) {
+        g_settings.hoverAnimation = BetterPanelHoverAnimation::Tilt;
+    } else if (hoverAnimation && wcscmp(hoverAnimation, L"spring") == 0) {
+        g_settings.hoverAnimation = BetterPanelHoverAnimation::Spring;
+    }
+    Wh_FreeStringSetting(hoverAnimation);
+
+    PCWSTR clickAnimation = Wh_GetStringSetting(L"clickAnimation.style");
+    g_settings.clickAnimation = BetterPanelClickAnimation::WindowsDefault;
+    if (clickAnimation && wcscmp(clickAnimation, L"none") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::None;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"press") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Press;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"pulse") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Pulse;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"bounce") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Bounce;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"flash") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Flash;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"shake") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Shake;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"spring") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Spring;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"spin") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Spin;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"squash") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Squash;
+    } else if (clickAnimation && wcscmp(clickAnimation, L"wobble") == 0) {
+        g_settings.clickAnimation = BetterPanelClickAnimation::Wobble;
+    }
+    Wh_FreeStringSetting(clickAnimation);
     return;
 
 #if 0
@@ -17180,21 +17919,27 @@ void Wh_ModUninit() {
 void Wh_ModSettingsChanged() {
     Wh_Log(L">");
 
+    bool wasCustomButtonLayout = g_settings.customButtonLayout;
     LoadSettings();
     LoadThemeSettings();
+    bool rebuildPanel =
+        wasCustomButtonLayout && !g_settings.customButtonLayout;
 
     auto hTargetWnds = GetTargetWnds();
     for (auto hTargetWnd : hTargetWnds) {
-        Wh_Log(L"Reinitializing for %08X", (DWORD)(ULONG_PTR)hTargetWnd);
+        Wh_Log(L"Applying settings for %08X", (DWORD)(ULONG_PTR)hTargetWnd);
         RunFromWindowThread(
             hTargetWnd,
             [](PVOID param) {
-                UninitializeForCurrentThread();
-                InitializeForCurrentThread();
-                BetterPanelScheduleCurrentThreadDiscovery();
-
+                bool rebuildPanel = reinterpret_cast<ULONG_PTR>(param) != 0;
+                if (rebuildPanel) {
+                    RemoveBetterDetailPanelsForCurrentThread();
+                    BetterPanelScheduleCurrentThreadDiscovery();
+                } else {
+                    BetterPanelApplyButtonSettingsForCurrentThread();
+                }
             },
-            (PVOID)hTargetWnd);
+            reinterpret_cast<PVOID>(rebuildPanel ? 1 : 0));
     }
 
 }

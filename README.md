@@ -23,7 +23,7 @@ operations while keeping the controls close to Windows 11's native appearance.
 Better Panel uses private Explorer WinUI elements. A Windows update can change
 those elements and require a mod update even on an otherwise compatible release.
 
-> **Version 2.1.2-beta.2 is a beta release.** Better Panel now discovers the
+> **Version 2.1.2-beta.3 is a beta release.** Better Panel now discovers the
 > Details pane through Explorer lifecycle hooks instead of occupying Explorer's
 > single XAML Diagnostics connection. It should therefore be able to run beside
 > Windows 11 File Explorer Styler. This has been confirmed on the tested Windows

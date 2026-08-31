@@ -1,19 +1,29 @@
 # Changelog
 
+## 2.1.2-beta.3
+
+> Adds button customization, animations, and potentially a faster loading for slower PC's
+
+### Added
+
+- Added a circular loading indicator for slower systems.
+- Added settings for button margins, padding, height, width, and icon size.
+- Added hover animations: Scale, Lift, Tilt, and Spring.
+- Added click animations: Press, Pulse, Bounce, Flash, Shake, Spring, Spin,
+  Squash, and Wobble.
+- Settings update live and can be reset to default.
+
+### Changed
+
+- Buttons now use Explorer's style.
+- Home and the Details pane now load faster.
+
 ## 2.1.2-beta.2
 
 > **Beta:** This update expands the diagnostics-free Beta 1 build with native
 > Favorites integration and a redesigned Home experience. Compatibility with
 > Windows 11 File Explorer Styler remains confirmed on the tested Windows 11
 > 25H2 system; broader Windows-build testing is still needed.
-
-### Notes
-
-The first start after installing or updating may take longer while Windhawk
-resolves and caches Explorer's private symbols. If the panel loads incompletely
-or continues showing old content, allow processing to finish and restart File
-Explorer. Restart Windows if the problem remains. Manual cache deletion is not
-normally required.
 
 ### Added
 

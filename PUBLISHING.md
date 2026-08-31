@@ -12,7 +12,7 @@
    `winui`.
 6. Publish the beta branch only after compiling and testing the exact committed
    source.
-7. Create a GitHub prerelease tagged `v2.1.2-beta.2` from the beta branch.
+7. Create a GitHub prerelease tagged `v2.1.2-beta.3` from the beta branch.
 
 ## Windhawk catalog submission
 
