@@ -17,12 +17,10 @@ Better Panel for Windows 11 is a Windhawk mod that turns File Explorer’s basic
 > [!WARNING]
 > Better Panel uses private Explorer WinUI elements. Windows updates may change these elements and require an update to the mod, even on an otherwise supported Windows version.
 
-⚠️ XAML diagnostics conflict
+### File Explorer Styler compatibility
 
-> [!IMPORTANT]
-> File Explorer only allows one XAML diagnostics consumer at a time. Do not enable Better Panel alongside another File Explorer mod that also uses XAML diagnostics.
-
-Better Panel includes a compatibility setting that can alert you, block the competing consumer, or allow it to take over. Allowing another consumer to take over may stop Better Panel from working.
+Better Panel does not occupy Explorer's XAML Diagnostics connection. It can run
+beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 
 ## Features
 
@@ -70,6 +68,7 @@ Better Panel includes a compatibility setting that can alert you, block the comp
 
 - Preview and edit TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV, scripts, configuration files, and common source-code formats.
 - **Edit**, **Save**, **Cancel**, and **Reload** controls.
+- Saved text-preview size menu.
 - Encoding and line-ending preservation.
 - External file-change detection.
 - Safe preview and editing size limits.
@@ -145,6 +144,7 @@ License and attribution
 
 Copyright © 2026 Nicole S.
 
-Better Panel is a separate mod with its own identity and features. Its XAML diagnostics compatibility layer allows Explorer features that require the single diagnostics connection to work together. It does not make Better Panel a theme or styling mod.
+Better Panel is its own separate mod. It does not contain, fork, or replace
+Windows 11 File Explorer Styler and is not a theme or styling mod.
 
-Distributed under the GNU General Public License v3.0 or later.
+Distributed under the [GNU General Public License v3.0 or later](LICENSE).

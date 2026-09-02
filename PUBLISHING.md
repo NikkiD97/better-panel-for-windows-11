@@ -10,7 +10,8 @@
    local installer scripts, registry exports, logs, or personal filesystem paths.
 5. Add repository topics such as `windhawk`, `windows-11`, `file-explorer`, and
    `winui`.
-6. Create a release tagged `v1.15.10` after testing the uploaded source.
+6. Publish only after compiling and testing the exact committed source.
+7. Create a GitHub release tagged `v2.1.2` from the main branch.
 
 ## Windhawk catalog submission
 
@@ -24,5 +25,5 @@ Before submitting:
 - Compile the exact source committed to GitHub.
 - Re-test core preview, playback, rename, archive, and multi-selection actions.
 - Keep Windows 11 24H2 labeled untested until it is run on an actual 24H2 system.
-- Confirm no conflicting XAML diagnostics mod is enabled during testing.
+- Test both by itself and alongside Windows 11 File Explorer Styler.
 - Review the official repository's current contribution requirements.

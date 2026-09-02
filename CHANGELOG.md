@@ -1,5 +1,104 @@
 # Changelog
 
+## 2.1.2
+
+### Added
+
+- Added a saved text-preview size menu.
+- Added Compact, Comfort, and Custom button layouts.
+
+### Changed
+
+- Temporary messages now sit beside the controls they belong to.
+- Custom padding and animations are consistent across panel sizes.
+
+## 2.1.2-beta.3
+
+> Adds button customization, animations, and potentially a faster loading for slower PC's
+
+### Added
+
+- Added a circular loading indicator for slower systems.
+- Added settings for button margins, padding, height, width, and icon size.
+- Added hover animations: Scale, Lift, Tilt, and Spring.
+- Added click animations: Press, Pulse, Bounce, Flash, Shake, Spring, Spin,
+  Squash, and Wobble.
+- Settings update live and can be reset to default.
+
+### Changed
+
+- Buttons now use Explorer's style.
+- Home and the Details pane now load faster.
+
+## 2.1.2-beta.2
+
+> **Beta:** This update expands the diagnostics-free Beta 1 build with native
+> Favorites integration and a redesigned Home experience. Compatibility with
+> Windows 11 File Explorer Styler remains confirmed on the tested Windows 11
+> 25H2 system; broader Windows-build testing is still needed.
+
+### Added
+
+- Added a native **Add to Favorites** and **Remove from Favorites** action.
+- Added persistent **Recent** and **Favorites** views to the custom Home panel.
+- Added Windows Shell icons for Home files, folders, archives, and drives using
+  the user's current file associations.
+- Added a Delete action for eligible files and folders.
+
+### Changed
+
+- Restyled **Devices and drives** with larger native drive artwork, clearer
+  capacity bars, compact spacing, and a flatter classic Explorer layout.
+- Moved **Move to** and archive extraction actions below the primary action row
+  so they remain visible at the panel's normal height.
+- Matched Open, Open with, rename, expand, restore, Print, Delete, and Copy more
+  closely to Explorer's native button styling, dimensions, and alignment.
+- Replaced the separate rename pencil with click-to-edit title text and refined
+  the editor dimensions to prevent clipping.
+- Removed the unavailable Share action from folder selections.
+- Protected main system and known folders from the panel's Delete action.
+
+### Fixed
+
+- Fixed folder actions and destination transfer controls being unavailable or
+  positioned below the panel's normally visible area.
+
+## 2.0.0-beta.1
+
+> **Beta:** The new diagnostics-free Better Details-panel integration has been
+> confirmed on the tested Windows 11 25H2 system. Other Windows builds and mod
+> combinations still need broader testing.
+
+### Notes
+
+The first start after installing or updating may take longer while Windhawk
+resolves and caches Explorer's private symbols. If the panel loads incompletely,
+allow symbol processing to finish and restart File Explorer. Restart Windows if
+the problem remains, or wait until Windhawk refreshes its cache.
+
+### Added
+
+- Added Details-pane discovery through Explorer lifecycle hooks in
+  `FileExplorerExtensions.dll`.
+- Added live WinUI visual-tree discovery anchored to the exact Explorer Details
+  pane.
+- Added direct association between each Better Panel instance and its owning
+  Explorer window and active tab.
+- Added compatibility with Windows 11 File Explorer Styler on the tested
+  Windows 11 25H2 system.
+
+### Changed
+
+- Selection changes now use Explorer's native Details-pane selection event.
+- Details-pane installation and refreshes no longer require Better Panel to
+  occupy Explorer's XAML Diagnostics connection.
+
+### Removed
+
+- Removed the requirement to disable other File Explorer mods solely because
+  they use XAML Diagnostics.
+- Removed the obsolete XAML Diagnostics compatibility setting.
+
 ## 1.15.22
 
 > **Stability recovery:** The major v1.15.10 recode exposed timing instability
