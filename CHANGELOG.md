@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.2
+
+### Added
+
+- Added a saved text-preview size menu.
+- Added Compact, Comfort, and Custom button layouts.
+
+### Changed
+
+- Temporary messages now sit beside the controls they belong to.
+- Custom padding and animations are consistent across panel sizes.
+
 ## 2.1.2-beta.3
 
 > Adds button customization, animations, and potentially a faster loading for slower PC's
