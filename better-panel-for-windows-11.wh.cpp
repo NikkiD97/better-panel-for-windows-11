@@ -18662,6 +18662,7 @@ void WINAPI BetterPanelCommandBarControl_Wave1_GotFocusHandler_Hook(
 std::atomic<bool> g_betterPanelExplorerSymbolsHooked;
 
 bool BetterPanelHookExplorerSymbols(HMODULE module) {
+    // FileExplorerExtensions.dll
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         {
             {
