@@ -11,7 +11,7 @@
 5. Add repository topics such as `windhawk`, `windows-11`, `file-explorer`, and
    `winui`.
 6. Publish only after compiling and testing the exact committed source.
-7. Create a GitHub release tagged `v2.1.2` from the main branch.
+7. Create a GitHub release tagged `v2.2.0` from the main branch.
 
 ## Windhawk catalog submission
 

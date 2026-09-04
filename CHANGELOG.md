@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.2
+
+### Added
+
+- Added syntax highlighting to text previews.
+- Added automatic code-language detection and a manual language selector.
+- Added overlapping Shell icons for multiple selections. Duplicate file types are shown once.
+- Added an expandable list showing which items are waiting to be moved between tabs.
+
+### Changed
+
+- Cross-tab Move now shows both the selected item and destination folder.
+- Drive roots can now be used as cross-tab Move destinations.
+- Multiple-selection actions now sit near the top of the panel, with Delete as  a compact icon button.
+
+
+### Fixed
+
+- Fixed old previews and Open-button icons remaining after selecting an unsupported file type.
+- *Potentially* fixed Details-pane recovery after sleep or hibernation.
+- Fixed sizing for Copy all and other icon buttons.
 ## 2.1.2
 
 ### Added

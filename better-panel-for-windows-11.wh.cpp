@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         2.1.2
+// @version         2.2.0
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -145,6 +145,8 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 * Inline preview and editing for TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV,
   scripts, configuration files, and common source-code formats, with explicit
   Save, Cancel, and Reload controls.
+* Native syntax highlighting with automatic language detection and a manual
+  language selector for common code, markup, configuration, and script files.
 * An audio player with artwork, play/pause, previous/next file, playback speed,
   repeat, shuffle, timeline, volume, mute, and elapsed/total time for MP3, OGG,
   Opus, FLAC, WAV, AAC/M4A, WMA, and other Windows-supported audio formats.
@@ -158,7 +160,9 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
   "archive-name\\"**.
 * Inline archive contents preview for ZIP, RAR, and 7Z before extraction.
 * Cross-tab **Extract here** and **Move to** actions that target any open
-  filesystem folder or selected destination subfolder.
+  filesystem folder, selected destination subfolder, or drive root.
+* Cross-tab Move labels show the source and destination, with an expandable
+  list of every item waiting to be moved.
 * Multi-selection support for moving files and folders through Windows' native
   progress, conflict, elevation, and undo handling.
 * A dedicated multi-selection row with **Move to...**, recycle-aware **Delete**,
@@ -174,12 +178,26 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
   rating, and GPS coordinates when the file contains those fields.
 * Rich multi-selection summaries with file/folder counts, combined file size,
   file-type totals, and the selected items' modified-date range.
+* A compact overlapping preview of representative Shell icons for multiple
+  selections without repeating the same item type.
 * A compact show/hide control for file previews.
 
 Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 2.2.0
+
+* Added syntax highlighting with automatic language detection and a manual
+  language selector.
+* Added representative Shell-icon previews for multiple selections.
+* Added clearer cross-tab Move labels and an expandable source-item list.
+* Added drive roots as cross-tab Move destinations.
+* Moved multiple-selection actions higher in the panel.
+* Made Compact sizing consistent across icon buttons.
+* Prevented stale previews and Open-button icons on unsupported file types.
+* Added safer Details-pane recovery after sleep or hibernation.
 
 ### 2.1.2
 
@@ -2055,12 +2073,15 @@ using namespace std::string_view_literals;
 #include <winrt/Microsoft.UI.Text.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.h>
 #include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Microsoft.UI.Xaml.Documents.h>
 #include <winrt/Microsoft.UI.Xaml.Hosting.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Microsoft.UI.Xaml.Markup.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
 #include <winrt/Microsoft.UI.Xaml.Media.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Provider.h>
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
@@ -2517,6 +2538,9 @@ void RemoveBetterDetailPanelsForCurrentThread() {
 namespace muxc = winrt::Microsoft::UI::Xaml::Controls;
 namespace muxp = winrt::Microsoft::UI::Xaml::Controls::Primitives;
 namespace muxa = winrt::Microsoft::UI::Xaml::Automation;
+namespace muxap = winrt::Microsoft::UI::Xaml::Automation::Peers;
+namespace muxapr = winrt::Microsoft::UI::Xaml::Automation::Provider;
+namespace muxd = winrt::Microsoft::UI::Xaml::Documents;
 namespace mud = winrt::Microsoft::UI::Dispatching;
 namespace wmc = winrt::Windows::Media::Core;
 namespace wmp = winrt::Windows::Media::Playback;
@@ -2533,6 +2557,25 @@ enum class BetterPanelTextEncoding {
     Utf16Le,
     Utf16Be,
     Ansi,
+};
+
+enum class BetterPanelSyntaxLanguage {
+    Auto,
+    PlainText,
+    Markdown,
+    Cpp,
+    CSharp,
+    JavaScript,
+    TypeScript,
+    Json,
+    Python,
+    PowerShell,
+    HtmlXml,
+    Css,
+    Yaml,
+    Ini,
+    Batch,
+    Sql,
 };
 
 struct BetterPanelAudioMetadata {
@@ -2572,6 +2615,7 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::Viewbox> videoViewport;
     winrt::weak_ref<muxc::Grid> nativePreview;
     winrt::weak_ref<muxc::Image> nativePreviewImage;
+    winrt::weak_ref<FrameworkElement> multiPreviewSurface;
     winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage animatedGif{nullptr};
     winrt::weak_ref<muxc::Image> artwork;
     winrt::weak_ref<muxc::TextBlock> artworkPlaceholder;
@@ -2579,6 +2623,7 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> fileTitleRow;
     winrt::weak_ref<muxc::TextBlock> fileTitle;
     winrt::weak_ref<muxc::Image> fileIcon;
+    winrt::weak_ref<muxc::FontIcon> fileFallbackIcon;
     winrt::weak_ref<muxc::TextBox> fileRenameBox;
     winrt::weak_ref<muxc::Button> fileRenameButton;
     winrt::weak_ref<muxc::TextBox> audioRenameBox;
@@ -2596,10 +2641,12 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::Button> shuffleButton;
     winrt::weak_ref<muxc::TextBlock> status;
     winrt::weak_ref<muxc::Button> nativeShareButton;
+    winrt::weak_ref<muxc::Button> shareButton;
     winrt::weak_ref<muxc::Panel> nativeShareParent;
     winrt::weak_ref<muxc::Grid> shareActionRow;
     winrt::weak_ref<muxc::Button> openButton;
     winrt::weak_ref<muxc::Image> openActionIcon;
+    winrt::weak_ref<muxc::FontIcon> openActionFallbackIcon;
     winrt::weak_ref<muxc::Button> openWithButton;
     winrt::weak_ref<muxc::Button> singleDeleteButton;
     winrt::weak_ref<muxc::Button> extractButton;
@@ -2608,11 +2655,18 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> transferRow;
     winrt::weak_ref<muxc::Button> transferExtractButton;
     winrt::weak_ref<muxc::Button> transferMoveButton;
-    winrt::weak_ref<muxc::TextBlock> transferDestinationText;
+    winrt::weak_ref<muxc::Button> transferItemsToggle;
+    winrt::weak_ref<FrameworkElement> transferItemsCard;
+    winrt::weak_ref<muxc::TextBlock> transferItemsText;
     winrt::weak_ref<FrameworkElement> multiActionRow;
     winrt::weak_ref<muxc::TextBlock> multiSelectionText;
+    winrt::weak_ref<muxc::Grid> multiPreviewHost;
+    winrt::weak_ref<muxc::Button> multiPreviewExpandButton;
     winrt::weak_ref<FrameworkElement> textCard;
     winrt::weak_ref<muxc::TextBox> textEditor;
+    winrt::weak_ref<FrameworkElement> syntaxPreviewSurface;
+    winrt::weak_ref<muxc::TextBlock> syntaxPreview;
+    winrt::weak_ref<muxc::ComboBox> syntaxLanguagePicker;
     winrt::weak_ref<muxc::Button> textEditButton;
     winrt::weak_ref<muxc::Button> textSaveButton;
     winrt::weak_ref<muxc::Button> textCancelButton;
@@ -2675,6 +2729,7 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::TextBlock> archivePreviewText;
     uint32_t nativeShareIndex = 0;
     Thickness nativeShareMargin{};
+    Visibility nativeShareVisibility = Visibility::Visible;
     bool previewExpanded = false;
     double previewOriginalHeight =
         std::numeric_limits<double>::quiet_NaN();
@@ -2688,6 +2743,11 @@ struct BetterPanelState {
     double gifNormalHeight = 260;
     std::vector<std::wstring> transferSources;
     std::wstring transferDestination;
+    std::wstring transferItemsKey;
+    bool transferItemsExpanded = false;
+    std::wstring multiPreviewKey;
+    bool multiPreviewExpanded = false;
+    double multiPreviewNormalHeight = 200;
     std::wstring textLoadedPath;
     std::wstring textOriginal;
     std::wstring textNewline = L"\r\n";
@@ -2699,6 +2759,9 @@ struct BetterPanelState {
     bool textEditing = false;
     bool textDirty = false;
     bool suppressTextChanged = false;
+    BetterPanelSyntaxLanguage syntaxLanguage = BetterPanelSyntaxLanguage::Auto;
+    BetterPanelSyntaxLanguage detectedSyntaxLanguage =
+        BetterPanelSyntaxLanguage::PlainText;
     wdp::PdfDocument pdfDocument{nullptr};
     std::wstring pdfLoadedPath;
     uint32_t pdfPageIndex = 0;
@@ -3268,40 +3331,46 @@ void BetterPanelApplyNativeButtonStyle(
         button.MinWidth(snapshot.minWidth);
         button.MinHeight(snapshot.minHeight);
 
-        if (g_settings.buttonLayoutMode !=
-            BetterPanelButtonLayoutMode::Compact) {
-            bool comfort = g_settings.buttonLayoutMode ==
-                           BetterPanelButtonLayoutMode::Comfort;
+        bool compact = g_settings.buttonLayoutMode ==
+                       BetterPanelButtonLayoutMode::Compact;
+        bool comfort = g_settings.buttonLayoutMode ==
+                       BetterPanelButtonLayoutMode::Comfort;
+        auto content = button.Content();
+        bool iconOnly = content &&
+            (content.try_as<muxc::FontIcon>() || content.try_as<muxc::Image>());
+        bool playbackSpeed = state->playbackSpeedButton.get() == button;
+        if (!compact) {
             int horizontalMargin =
                 comfort ? 0 : g_settings.buttonHorizontalMargin;
             int verticalMargin = comfort ? 0 : g_settings.buttonVerticalMargin;
-            int horizontalPadding =
-                comfort ? 10 : g_settings.buttonHorizontalPadding;
-            int verticalPadding = comfort ? 4 : g_settings.buttonVerticalPadding;
-            int minimumWidth = comfort ? 0 : g_settings.buttonMinimumWidth;
-            int minimumHeight = comfort ? 32 : g_settings.buttonMinimumHeight;
-            int iconButtonSize = comfort ? 32 : g_settings.iconButtonSize;
             button.Margin(Thickness{
                 snapshot.margin.Left + horizontalMargin,
                 snapshot.margin.Top + verticalMargin,
                 snapshot.margin.Right + horizontalMargin,
                 snapshot.margin.Bottom + verticalMargin});
-            auto content = button.Content();
-            bool iconOnly = content &&
-                (content.try_as<muxc::FontIcon>() ||
-                 content.try_as<muxc::Image>());
-            bool playbackSpeed =
-                state->playbackSpeedButton.get() == button;
-            if (iconOnly || playbackSpeed) {
-                double size = iconButtonSize;
-                double width = playbackSpeed ? std::max(34.0, size) : size;
-                button.Width(width);
-                button.Height(size);
-                button.MinWidth(width);
-                button.MinHeight(size);
-                button.Padding(playbackSpeed ? Thickness{2, 0, 2, 0}
-                                             : Thickness{0});
-            } else {
+        }
+        if (iconOnly || playbackSpeed) {
+            // Compact is a real shared preset, not each control's unrelated
+            // hard-coded starting size. This keeps Copy all, preview, print,
+            // delete, expand, and media icon buttons in step with one another.
+            double size = compact ? 28.0
+                                  : (comfort ? 32.0
+                                             : g_settings.iconButtonSize);
+            double width = playbackSpeed ? std::max(34.0, size) : size;
+            button.Width(width);
+            button.Height(size);
+            button.MinWidth(width);
+            button.MinHeight(size);
+            button.Padding(playbackSpeed ? Thickness{2, 0, 2, 0}
+                                         : Thickness{0});
+        } else if (!compact) {
+                int horizontalPadding =
+                    comfort ? 10 : g_settings.buttonHorizontalPadding;
+                int verticalPadding =
+                    comfort ? 4 : g_settings.buttonVerticalPadding;
+                int minimumWidth = comfort ? 0 : g_settings.buttonMinimumWidth;
+                int minimumHeight =
+                    comfort ? 32 : g_settings.buttonMinimumHeight;
                 button.MinWidth(minimumWidth);
                 button.MinHeight(minimumHeight);
                 button.Padding(Thickness{
@@ -3324,7 +3393,6 @@ void BetterPanelApplyNativeButtonStyle(
                     button.Height(std::max(0.0,
                                            snapshot.height + paddingDelta));
                 }
-            }
         }
     } else if (auto button = root.try_as<muxp::ToggleButton>();
                button) {
@@ -3522,6 +3590,7 @@ void BetterPanelQueueFavoriteCheck(
 void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state);
 void BetterPanelInvalidateExplorerQueryCaches();
 HWND BetterPanelGetFocusedTabWindow();
+void BetterPanelHandlePowerMessage(MSG const* message);
 
 void BetterPanelPrepareMiddleClick(MSG const* message);
 void BetterPanelHandleMiddleClick(MSG const* message);
@@ -3656,8 +3725,11 @@ BOOL WINAPI GetMessageW_Hook(LPMSG message,
                              UINT maximumMessage) {
     BOOL result =
         GetMessageW_Original(message, window, minimumMessage, maximumMessage);
-    if (result > 0 && !BetterPanelConsumeBackspaceMessage(message)) {
-        BetterPanelQueueInteractiveRefresh(message);
+    if (result > 0) {
+        BetterPanelHandlePowerMessage(message);
+        if (!BetterPanelConsumeBackspaceMessage(message)) {
+            BetterPanelQueueInteractiveRefresh(message);
+        }
     }
     return result;
 }
@@ -3670,8 +3742,9 @@ BOOL WINAPI PeekMessageW_Hook(LPMSG message,
                               UINT maximumMessage,
                               UINT removeMessage) {
     BOOL result = PeekMessageW_Original(message, window, minimumMessage,
-                                        maximumMessage, removeMessage);
+                                         maximumMessage, removeMessage);
     if (result && (removeMessage & PM_REMOVE)) {
+        BetterPanelHandlePowerMessage(message);
         if (!BetterPanelConsumeBackspaceMessage(message)) {
             BetterPanelQueueInteractiveRefresh(message);
         }
@@ -6076,10 +6149,328 @@ void BetterPanelSetStatus(winrt::weak_ref<muxc::TextBlock> weakStatus,
     }
 }
 
+struct BetterPanelSyntaxOption {
+    BetterPanelSyntaxLanguage language;
+    PCWSTR label;
+};
+
+constexpr std::array<BetterPanelSyntaxOption, 16> kBetterPanelSyntaxOptions{{
+    {BetterPanelSyntaxLanguage::Auto, L"Auto"},
+    {BetterPanelSyntaxLanguage::PlainText, L"Plain text"},
+    {BetterPanelSyntaxLanguage::Markdown, L"Markdown"},
+    {BetterPanelSyntaxLanguage::Cpp, L"C / C++"},
+    {BetterPanelSyntaxLanguage::CSharp, L"C#"},
+    {BetterPanelSyntaxLanguage::JavaScript, L"JavaScript"},
+    {BetterPanelSyntaxLanguage::TypeScript, L"TypeScript"},
+    {BetterPanelSyntaxLanguage::Json, L"JSON"},
+    {BetterPanelSyntaxLanguage::Python, L"Python"},
+    {BetterPanelSyntaxLanguage::PowerShell, L"PowerShell"},
+    {BetterPanelSyntaxLanguage::HtmlXml, L"HTML / XML"},
+    {BetterPanelSyntaxLanguage::Css, L"CSS"},
+    {BetterPanelSyntaxLanguage::Yaml, L"YAML"},
+    {BetterPanelSyntaxLanguage::Ini, L"INI / config"},
+    {BetterPanelSyntaxLanguage::Batch, L"Batch"},
+    {BetterPanelSyntaxLanguage::Sql, L"SQL"},
+}};
+
+PCWSTR BetterPanelSyntaxLanguageName(BetterPanelSyntaxLanguage language) {
+    for (auto const& option : kBetterPanelSyntaxOptions) {
+        if (option.language == language) return option.label;
+    }
+    return L"Plain text";
+}
+
+BetterPanelSyntaxLanguage BetterPanelDetectSyntaxLanguage(
+    std::wstring const& path) {
+    std::wstring extension = PathFindExtensionW(path.c_str());
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    if (extension == L".md" || extension == L".markdown")
+        return BetterPanelSyntaxLanguage::Markdown;
+    if (extension == L".c" || extension == L".cc" ||
+        extension == L".cpp" || extension == L".cxx" ||
+        extension == L".h" || extension == L".hh" ||
+        extension == L".hpp") return BetterPanelSyntaxLanguage::Cpp;
+    if (extension == L".cs") return BetterPanelSyntaxLanguage::CSharp;
+    if (extension == L".js" || extension == L".jsx" ||
+        extension == L".mjs" || extension == L".cjs")
+        return BetterPanelSyntaxLanguage::JavaScript;
+    if (extension == L".ts" || extension == L".tsx")
+        return BetterPanelSyntaxLanguage::TypeScript;
+    if (extension == L".json" || extension == L".jsonc")
+        return BetterPanelSyntaxLanguage::Json;
+    if (extension == L".py" || extension == L".pyw")
+        return BetterPanelSyntaxLanguage::Python;
+    if (extension == L".ps1" || extension == L".psm1" ||
+        extension == L".psd1") return BetterPanelSyntaxLanguage::PowerShell;
+    if (extension == L".html" || extension == L".htm" ||
+        extension == L".xml" || extension == L".xaml" ||
+        extension == L".svg") return BetterPanelSyntaxLanguage::HtmlXml;
+    if (extension == L".css" || extension == L".scss" ||
+        extension == L".less") return BetterPanelSyntaxLanguage::Css;
+    if (extension == L".yaml" || extension == L".yml")
+        return BetterPanelSyntaxLanguage::Yaml;
+    if (extension == L".ini" || extension == L".cfg" ||
+        extension == L".conf") return BetterPanelSyntaxLanguage::Ini;
+    if (extension == L".bat" || extension == L".cmd")
+        return BetterPanelSyntaxLanguage::Batch;
+    if (extension == L".sql") return BetterPanelSyntaxLanguage::Sql;
+    return BetterPanelSyntaxLanguage::PlainText;
+}
+
+enum class BetterPanelSyntaxColor { Keyword, String, Comment, Number, Type };
+struct BetterPanelSyntaxSpan {
+    size_t start;
+    size_t length;
+    BetterPanelSyntaxColor color;
+};
+
+bool BetterPanelIsSyntaxKeyword(BetterPanelSyntaxLanguage language,
+                                std::wstring const& token) {
+    static const std::unordered_set<std::wstring> common{
+        L"abstract", L"as", L"async", L"await", L"break", L"case",
+        L"catch", L"class", L"const", L"continue", L"default", L"do",
+        L"else", L"enum", L"export", L"extends", L"false", L"finally",
+        L"for", L"foreach", L"from", L"function", L"if", L"import",
+        L"in", L"interface", L"internal", L"let", L"namespace", L"new",
+        L"null", L"nullptr", L"operator", L"out", L"override", L"private",
+        L"protected", L"public", L"readonly", L"return", L"static",
+        L"struct", L"switch", L"this", L"throw", L"true", L"try",
+        L"typeof", L"using", L"var", L"virtual", L"void", L"while",
+        L"yield", L"string", L"int", L"double", L"float", L"bool",
+    };
+    static const std::unordered_set<std::wstring> python{
+        L"and", L"as", L"assert", L"async", L"await", L"break", L"class",
+        L"continue", L"def", L"del", L"elif", L"else", L"except", L"False",
+        L"finally", L"for", L"from", L"global", L"if", L"import", L"in",
+        L"is", L"lambda", L"None", L"nonlocal", L"not", L"or", L"pass",
+        L"raise", L"return", L"True", L"try", L"while", L"with", L"yield",
+    };
+    static const std::unordered_set<std::wstring> sql{
+        L"alter", L"and", L"as", L"asc", L"begin", L"by", L"create",
+        L"delete", L"desc", L"distinct", L"drop", L"else", L"end", L"from",
+        L"group", L"having", L"in", L"insert", L"into", L"is", L"join",
+        L"like", L"limit", L"not", L"null", L"on", L"or", L"order",
+        L"select", L"set", L"table", L"then", L"union", L"update",
+        L"values", L"when", L"where",
+    };
+    if (language == BetterPanelSyntaxLanguage::Python)
+        return python.contains(token);
+    if (language == BetterPanelSyntaxLanguage::Sql) {
+        std::wstring lowered = token;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       towlower);
+        return sql.contains(lowered);
+    }
+    return common.contains(token);
+}
+
+std::vector<BetterPanelSyntaxSpan> BetterPanelBuildSyntaxSpans(
+    std::wstring const& text, BetterPanelSyntaxLanguage language) {
+    std::vector<BetterPanelSyntaxSpan> spans;
+    if (language == BetterPanelSyntaxLanguage::PlainText ||
+        text.size() > 200000) return spans;
+    constexpr size_t maxSpans = 4000;
+    auto add = [&](size_t start, size_t end, BetterPanelSyntaxColor color) {
+        if (end > start && spans.size() < maxSpans)
+            spans.push_back({start, end - start, color});
+    };
+
+    if (language == BetterPanelSyntaxLanguage::HtmlXml) {
+        for (size_t i = 0; i < text.size() && spans.size() < maxSpans;) {
+            if (text.compare(i, 4, L"<!--") == 0) {
+                size_t end = text.find(L"-->", i + 4);
+                end = end == std::wstring::npos ? text.size() : end + 3;
+                add(i, end, BetterPanelSyntaxColor::Comment);
+                i = end;
+            } else if (text[i] == L'<') {
+                size_t end = text.find(L'>', i + 1);
+                end = end == std::wstring::npos ? text.size() : end + 1;
+                add(i, end, BetterPanelSyntaxColor::Type);
+                i = end;
+            } else {
+                ++i;
+            }
+        }
+        return spans;
+    }
+
+    if (language == BetterPanelSyntaxLanguage::Markdown) {
+        for (size_t i = 0; i < text.size() && spans.size() < maxSpans;) {
+            bool lineStart = i == 0 || text[i - 1] == L'\n';
+            if (lineStart && text.compare(i, 3, L"```") == 0) {
+                size_t end = text.find(L'\n', i);
+                end = end == std::wstring::npos ? text.size() : end;
+                add(i, end, BetterPanelSyntaxColor::Keyword);
+                i = end;
+            } else if (lineStart && text[i] == L'#') {
+                size_t end = text.find(L'\n', i);
+                end = end == std::wstring::npos ? text.size() : end;
+                add(i, end, BetterPanelSyntaxColor::Keyword);
+                i = end;
+            } else if (text[i] == L'`') {
+                size_t end = text.find(L'`', i + 1);
+                end = end == std::wstring::npos ? text.size() : end + 1;
+                add(i, end, BetterPanelSyntaxColor::String);
+                i = end;
+            } else {
+                ++i;
+            }
+        }
+        return spans;
+    }
+
+    bool hashComments = language == BetterPanelSyntaxLanguage::Python ||
+                        language == BetterPanelSyntaxLanguage::PowerShell ||
+                        language == BetterPanelSyntaxLanguage::Yaml;
+    bool semicolonComments = language == BetterPanelSyntaxLanguage::Ini;
+    for (size_t i = 0; i < text.size() && spans.size() < maxSpans;) {
+        if (i + 1 < text.size() && text[i] == L'/' && text[i + 1] == L'/') {
+            size_t end = text.find(L'\n', i + 2);
+            end = end == std::wstring::npos ? text.size() : end;
+            add(i, end, BetterPanelSyntaxColor::Comment);
+            i = end;
+        } else if (i + 1 < text.size() && text[i] == L'/' &&
+                   text[i + 1] == L'*') {
+            size_t end = text.find(L"*/", i + 2);
+            end = end == std::wstring::npos ? text.size() : end + 2;
+            add(i, end, BetterPanelSyntaxColor::Comment);
+            i = end;
+        } else if ((hashComments && text[i] == L'#') ||
+                   (semicolonComments && text[i] == L';')) {
+            size_t end = text.find(L'\n', i + 1);
+            end = end == std::wstring::npos ? text.size() : end;
+            add(i, end, BetterPanelSyntaxColor::Comment);
+            i = end;
+        } else if (text[i] == L'"' || text[i] == L'\'' ||
+                   (language == BetterPanelSyntaxLanguage::PowerShell &&
+                    text[i] == L'`')) {
+            wchar_t quote = text[i];
+            size_t end = i + 1;
+            while (end < text.size()) {
+                if (text[end] == L'\\') {
+                    end += std::min<size_t>(2, text.size() - end);
+                } else if (text[end++] == quote) {
+                    break;
+                } else if (quote == L'`' && text[end - 1] == L'\n') {
+                    break;
+                }
+            }
+            add(i, end, BetterPanelSyntaxColor::String);
+            i = end;
+        } else if (iswdigit(text[i])) {
+            size_t end = i + 1;
+            while (end < text.size() &&
+                   (iswalnum(text[end]) || text[end] == L'.' ||
+                    text[end] == L'_')) ++end;
+            add(i, end, BetterPanelSyntaxColor::Number);
+            i = end;
+        } else if (iswalpha(text[i]) || text[i] == L'_') {
+            size_t end = i + 1;
+            while (end < text.size() &&
+                   (iswalnum(text[end]) || text[end] == L'_')) ++end;
+            std::wstring token = text.substr(i, end - i);
+            if (BetterPanelIsSyntaxKeyword(language, token)) {
+                add(i, end, BetterPanelSyntaxColor::Keyword);
+            } else if (!token.empty() && iswupper(token.front())) {
+                add(i, end, BetterPanelSyntaxColor::Type);
+            }
+            i = end;
+        } else {
+            ++i;
+        }
+    }
+    return spans;
+}
+
+void BetterPanelRenderSyntaxPreview(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::wstring const& text) {
+    auto preview = state->syntaxPreview.get();
+    if (!preview) return;
+    auto language = state->syntaxLanguage == BetterPanelSyntaxLanguage::Auto
+                        ? BetterPanelDetectSyntaxLanguage(state->selectedPath)
+                        : state->syntaxLanguage;
+    state->detectedSyntaxLanguage = language;
+    if (auto picker = state->syntaxLanguagePicker.get();
+        picker && picker.Items().Size() > 0) {
+        if (auto autoItem =
+                picker.Items().GetAt(0).try_as<muxc::ComboBoxItem>()) {
+            std::wstring autoLabel =
+                std::wstring(L"Auto - ") +
+                BetterPanelSyntaxLanguageName(
+                    BetterPanelDetectSyntaxLanguage(state->selectedPath));
+            std::wstring currentLabel;
+            if (auto content = autoItem.Content()) {
+                currentLabel = winrt::unbox_value_or<winrt::hstring>(
+                                   content, L"")
+                                   .c_str();
+            }
+            if (currentLabel != autoLabel) {
+                // ComboBox caches the closed selection display. Briefly clear
+                // and restore Auto so its visible label follows the newly
+                // detected file type instead of keeping the first one shown.
+                bool autoSelected = picker.SelectedIndex() == 0;
+                if (autoSelected) picker.SelectedIndex(-1);
+                autoItem.Content(winrt::box_value(autoLabel));
+                if (autoSelected) picker.SelectedIndex(0);
+            }
+        }
+    }
+    auto spans = BetterPanelBuildSyntaxSpans(text, language);
+    preview.Inlines().Clear();
+    if (spans.empty()) {
+        preview.Text(text);
+        return;
+    }
+
+    using Brush = winrt::Microsoft::UI::Xaml::Media::SolidColorBrush;
+    auto makeBrush = [](BYTE r, BYTE g, BYTE b) {
+        return Brush(winrt::Windows::UI::ColorHelper::FromArgb(255, r, g, b));
+    };
+    Brush keyword = makeBrush(86, 156, 214);
+    Brush string = makeBrush(206, 145, 120);
+    Brush comment = makeBrush(106, 153, 85);
+    Brush number = makeBrush(181, 206, 168);
+    Brush type = makeBrush(78, 201, 176);
+    size_t position = 0;
+    for (auto const& span : spans) {
+        if (span.start > position) {
+            muxd::Run run;
+            run.Text(text.substr(position, span.start - position));
+            preview.Inlines().Append(run);
+        }
+        muxd::Run run;
+        run.Text(text.substr(span.start, span.length));
+        switch (span.color) {
+            case BetterPanelSyntaxColor::Keyword: run.Foreground(keyword); break;
+            case BetterPanelSyntaxColor::String: run.Foreground(string); break;
+            case BetterPanelSyntaxColor::Comment: run.Foreground(comment); break;
+            case BetterPanelSyntaxColor::Number: run.Foreground(number); break;
+            case BetterPanelSyntaxColor::Type: run.Foreground(type); break;
+        }
+        preview.Inlines().Append(run);
+        position = span.start + span.length;
+    }
+    if (position < text.size()) {
+        muxd::Run run;
+        run.Text(text.substr(position));
+        preview.Inlines().Append(run);
+    }
+}
+
 void BetterPanelUpdateTextControls(
     std::shared_ptr<BetterPanelState> const& state) {
     auto editor = state->textEditor.get();
-    if (editor) editor.IsReadOnly(!state->textEditing);
+    if (editor) {
+        editor.IsReadOnly(!state->textEditing);
+        editor.Visibility(state->textEditing ? Visibility::Visible
+                                             : Visibility::Collapsed);
+    }
+    if (auto preview = state->syntaxPreviewSurface.get()) {
+        preview.Visibility(state->textEditing ? Visibility::Collapsed
+                                              : Visibility::Visible);
+    }
     if (auto button = state->textEditButton.get()) {
         button.Visibility(state->textEditable && !state->textEditing
                               ? Visibility::Visible
@@ -6113,6 +6504,12 @@ void BetterPanelUpdateTextControls(
             } else if (!state->textEditable) {
                 label += L" • Read-only preview";
             }
+            if (state->detectedSyntaxLanguage !=
+                BetterPanelSyntaxLanguage::PlainText) {
+                label += L" • ";
+                label += BetterPanelSyntaxLanguageName(
+                    state->detectedSyntaxLanguage);
+            }
             info.Text(label);
         } else {
             info.Text(L"");
@@ -6134,6 +6531,7 @@ void BetterPanelLoadTextPreview(
     state->suppressTextChanged = true;
     editor.IsReadOnly(true);
     editor.Text(L"Loading preview…");
+    BetterPanelRenderSyntaxPreview(state, L"Loading preview…");
     state->suppressTextChanged = false;
     BetterPanelUpdateTextControls(state);
 
@@ -6164,6 +6562,8 @@ void BetterPanelLoadTextPreview(
                 state->textOriginal = data.success
                                           ? std::wstring(editor.Text().c_str())
                                           : L"";
+                BetterPanelRenderSyntaxPreview(
+                    state, data.success ? data.text : data.message);
                 BetterPanelUpdateTextControls(state);
                 if (!data.message.empty()) {
                     if (auto info = state->textInfo.get()) {
@@ -6203,6 +6603,7 @@ void BetterPanelCancelTextEdit(
         state->suppressTextChanged = true;
         editor.Text(state->textOriginal);
         state->suppressTextChanged = false;
+        BetterPanelRenderSyntaxPreview(state, state->textOriginal);
     }
     state->textEditing = false;
     state->textDirty = false;
@@ -6250,6 +6651,7 @@ void BetterPanelSaveTextEdit(
                             state->textLastWriteTime);
     state->textEditing = false;
     state->textDirty = false;
+    BetterPanelRenderSyntaxPreview(state, editorText);
     BetterPanelUpdateTextControls(state);
     BetterPanelSetStatus(
         state->textActionStatus,
@@ -6308,6 +6710,9 @@ winrt::fire_and_forget BetterPanelLoadFileIcon(
         }
         if (auto icon = state->fileIcon.get()) {
             icon.Source(bitmap);
+            if (auto fallback = state->fileFallbackIcon.get()) {
+                fallback.Visibility(Visibility::Collapsed);
+            }
         }
     } catch (winrt::hresult_error const& ex) {
         Wh_Log(L"File icon error %08X: %s", ex.code(), ex.message().c_str());
@@ -6325,6 +6730,11 @@ winrt::fire_and_forget BetterPanelLoadOpenActionIcon(
             wsf::ThumbnailMode::ListView, 32,
             wsf::ThumbnailOptions::UseCurrentScale);
         if (!thumbnail) {
+            thumbnail = co_await file.GetThumbnailAsync(
+                wsf::ThumbnailMode::SingleItem, 32,
+                wsf::ThumbnailOptions::ResizeThumbnail);
+        }
+        if (!thumbnail) {
             co_return;
         }
         winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap;
@@ -6335,6 +6745,9 @@ winrt::fire_and_forget BetterPanelLoadOpenActionIcon(
         }
         if (auto icon = state->openActionIcon.get()) {
             icon.Source(bitmap);
+            if (auto fallback = state->openActionFallbackIcon.get()) {
+                fallback.Visibility(Visibility::Collapsed);
+            }
         }
     } catch (winrt::hresult_error const& ex) {
         Wh_Log(L"Open action icon error %08X: %s", ex.code(),
@@ -6381,6 +6794,154 @@ winrt::fire_and_forget BetterPanelLoadHomeLocationIcon(
         Wh_Log(L"Home Shell icon error %08X: %s", ex.code(),
                ex.message().c_str());
     }
+}
+
+winrt::fire_and_forget BetterPanelLoadMultiPreviewIcon(
+    std::weak_ptr<BetterPanelState> weakState,
+    winrt::weak_ref<muxc::Image> weakImage,
+    winrt::weak_ref<muxc::FontIcon> weakFallback,
+    std::wstring path,
+    std::wstring selectionKey) {
+    try {
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            co_return;
+        }
+
+        wsf::StorageItemThumbnail thumbnail{nullptr};
+        if (attributes & FILE_ATTRIBUTE_DIRECTORY) {
+            auto folder = co_await ws::StorageFolder::GetFolderFromPathAsync(path);
+            thumbnail = co_await folder.GetThumbnailAsync(
+                wsf::ThumbnailMode::ListView, 64,
+                wsf::ThumbnailOptions::UseCurrentScale);
+        } else {
+            auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+            thumbnail = co_await file.GetThumbnailAsync(
+                wsf::ThumbnailMode::ListView, 64,
+                wsf::ThumbnailOptions::UseCurrentScale);
+        }
+        if (!thumbnail) {
+            co_return;
+        }
+
+        winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap;
+        co_await bitmap.SetSourceAsync(thumbnail);
+        auto state = weakState.lock();
+        if (!state || state->unloaded ||
+            state->multiPreviewKey != selectionKey) {
+            co_return;
+        }
+        if (auto image = weakImage.get()) {
+            image.Source(bitmap);
+            image.Visibility(Visibility::Visible);
+            if (auto fallback = weakFallback.get()) {
+                fallback.Visibility(Visibility::Collapsed);
+            }
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Multi-selection icon error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
+void BetterPanelPopulateMultiPreview(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::vector<std::wstring> const& paths) {
+    auto host = state->multiPreviewHost.get();
+    if (!host) return;
+
+    std::wstring key;
+    for (auto const& path : paths) {
+        key += path;
+        key.push_back(L'\n');
+    }
+    if (key == state->multiPreviewKey) return;
+    state->multiPreviewKey = key;
+    host.Children().Clear();
+
+    std::vector<std::wstring> representativePaths;
+    std::unordered_set<std::wstring> representedTypes;
+    for (auto const& path : paths) {
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        bool directory = attributes != INVALID_FILE_ATTRIBUTES &&
+                         (attributes & FILE_ATTRIBUTE_DIRECTORY);
+        std::wstring typeKey;
+        if (directory) {
+            typeKey = L"<folder>";
+        } else {
+            PCWSTR extension = PathFindExtensionW(path.c_str());
+            typeKey = extension && *extension ? extension : L"<file>";
+            std::transform(typeKey.begin(), typeKey.end(), typeKey.begin(),
+                           [](wchar_t ch) { return std::towlower(ch); });
+        }
+        if (representedTypes.insert(typeKey).second) {
+            representativePaths.push_back(path);
+            if (representativePaths.size() == 4) break;
+        }
+    }
+
+    size_t visibleCount = representativePaths.size();
+    if (visibleCount == 0) {
+        host.Width(0);
+        host.Height(0);
+        return;
+    }
+    constexpr double iconSize = 56.0;
+    constexpr double horizontalOffset = 24.0;
+    constexpr double verticalOffset = 4.0;
+    host.Width(iconSize +
+               horizontalOffset * static_cast<double>(visibleCount - 1));
+    host.Height(iconSize +
+                verticalOffset * static_cast<double>(visibleCount - 1));
+    for (size_t index = 0; index < visibleCount; ++index) {
+        auto const& path = representativePaths[index];
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        bool directory = attributes != INVALID_FILE_ATTRIBUTES &&
+                         (attributes & FILE_ATTRIBUTE_DIRECTORY);
+
+        muxc::Grid iconHost;
+        iconHost.Width(iconSize);
+        iconHost.Height(iconSize);
+        iconHost.HorizontalAlignment(HorizontalAlignment::Left);
+        iconHost.VerticalAlignment(VerticalAlignment::Top);
+        iconHost.Margin(Thickness{
+            horizontalOffset * static_cast<double>(index),
+            verticalOffset * static_cast<double>(index), 0, 0});
+        muxc::Canvas::SetZIndex(iconHost, static_cast<int32_t>(index));
+        muxc::ToolTipService::SetToolTip(
+            iconHost, winrt::box_value(BetterPanelFileName(path)));
+
+        muxc::FontIcon fallback;
+        fallback.Glyph(directory ? L"\uE8B7" : L"\uE7C3");
+        fallback.FontSize(34);
+        fallback.Opacity(0.80);
+        iconHost.Children().Append(fallback);
+
+        muxc::Image image;
+        image.Width(48);
+        image.Height(48);
+        image.Stretch(
+            winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
+        image.Visibility(Visibility::Collapsed);
+        iconHost.Children().Append(image);
+        host.Children().Append(iconHost);
+
+        BetterPanelLoadMultiPreviewIcon(
+            std::weak_ptr<BetterPanelState>(state), winrt::make_weak(image),
+            winrt::make_weak(fallback), path, key);
+    }
+}
+
+std::wstring BetterPanelTransferItemsText(
+    std::vector<std::wstring> const& sources) {
+    std::wstring text;
+    for (auto const& source : sources) {
+        std::wstring name = BetterPanelFileName(source);
+        if (name.empty()) name = source;
+        if (!text.empty()) text += L"\r\n";
+        text += L"\u2022 " + name;
+    }
+    return text;
 }
 
 winrt::fire_and_forget BetterPanelLoadVideo(
@@ -6714,6 +7275,50 @@ muxc::Button BetterPanelMakeIconButton(PCWSTR label, PCWSTR glyph) {
     button.Padding(Thickness{10, 4, 10, 4});
     button.Height(32);
     return button;
+}
+
+void BetterPanelSetIconButtonLabel(muxc::Button const& button,
+                                   std::wstring const& label) {
+    if (!button) return;
+    if (auto content = button.Content().try_as<muxc::StackPanel>();
+        content && content.Children().Size() > 1) {
+        if (auto text = content.Children().GetAt(1).try_as<muxc::TextBlock>()) {
+            if (text.Text() != label) text.Text(label);
+        }
+    }
+    muxa::AutomationProperties::SetName(button, label);
+    muxc::ToolTipService::SetToolTip(button, winrt::box_value(label));
+}
+
+std::wstring BetterPanelDestinationLabel(std::wstring const& path) {
+    if (path.empty()) return {};
+    if (PathIsRootW(path.c_str())) {
+        WCHAR volumeName[MAX_PATH]{};
+        GetVolumeInformationW(path.c_str(), volumeName, ARRAYSIZE(volumeName),
+                              nullptr, nullptr, nullptr, nullptr, 0);
+        std::wstring label = volumeName[0] ? volumeName : L"Local Disk";
+        if (path.size() >= 2) {
+            label += L" (" + path.substr(0, 2) + L")";
+        }
+        return label;
+    }
+    auto label = BetterPanelFileName(path);
+    return label.empty() ? path : label;
+}
+
+std::wstring BetterPanelTransferMoveLabel(
+    std::vector<std::wstring> const& sources,
+    std::wstring const& destination) {
+    if (sources.empty() || destination.empty()) return L"Move to";
+    std::wstring sourceLabel;
+    if (sources.size() == 1) {
+        sourceLabel = BetterPanelFileName(sources.front());
+        if (sourceLabel.empty()) sourceLabel = sources.front();
+    } else {
+        sourceLabel = std::to_wstring(sources.size()) + L" items";
+    }
+    return L"Move " + sourceLabel + L" to " +
+           BetterPanelDestinationLabel(destination);
 }
 
 struct BetterPanelHomeLocation {
@@ -8903,12 +9508,12 @@ void BetterPanelEnsureShareActions(
     state->nativeShareParent = winrt::make_weak(parent);
     state->nativeShareIndex = shareIndex;
     state->nativeShareMargin = share.Margin();
+    state->nativeShareVisibility = share.Visibility();
 
     // Use Explorer's own Share control as the visual and sizing reference for
-    // the primary file actions and the compact overlay controls. Clear the
-    // fixed width used by the previous test build before measuring Explorer's
-    // natural Share width.
-    share.ClearValue(FrameworkElement::WidthProperty());
+    // the primary file actions and the compact overlay controls. Leave the
+    // native button in Explorer's own visual tree; its sharing view model owns
+    // popup state that can be refreshed after sleep or hibernation.
     share.UpdateLayout();
     double primaryActionWidth = share.ActualWidth();
     if (primaryActionWidth < 1) primaryActionWidth = 80;
@@ -8930,17 +9535,17 @@ void BetterPanelEnsureShareActions(
         applyNativeButtonVisual(expand);
         BetterPanelApplyNativeButtonStyle(state, expand);
     }
+    if (auto expand = state->multiPreviewExpandButton.get()) {
+        applyNativeButtonVisual(expand);
+        BetterPanelApplyNativeButtonStyle(state, expand);
+    }
     if (auto expand = state->gifExpandButton.get()) {
         applyNativeButtonVisual(expand);
         BetterPanelApplyNativeButtonStyle(state, expand);
     }
 
-    share.Margin(Thickness{0, 0, 0, 0});
-    parent.Children().RemoveAt(shareIndex);
-
     auto primaryActions = BetterPanelMakeRow();
     primaryActions.HorizontalAlignment(HorizontalAlignment::Left);
-    primaryActions.Children().Append(share);
     row.Children().Append(primaryActions);
 
     auto actionIconBrush =
@@ -8949,6 +9554,38 @@ void BetterPanelEnsureShareActions(
 
     double shareHeight = share.ActualHeight();
     if (shareHeight < 1) shareHeight = 30;
+
+    auto shareButton = BetterPanelMakeIconButton(L"Share", L"\uE72D");
+    applyNativeButtonVisual(shareButton);
+    shareButton.Width(primaryActionWidth);
+    shareButton.Height(shareHeight);
+    shareButton.Padding(Thickness{6, 4, 6, 4});
+    state->shareButton = winrt::make_weak(shareButton);
+    auto weakNativeShare = winrt::make_weak(share);
+    shareButton.Click(
+        [weakNativeShare, weakStatus](auto const&, RoutedEventArgs const&) {
+            try {
+                auto nativeShare = weakNativeShare.get();
+                if (!nativeShare) {
+                    BetterPanelSetStatus(weakStatus, L"Share is unavailable");
+                    return;
+                }
+                auto peer = muxap::FrameworkElementAutomationPeer::
+                    CreatePeerForElement(nativeShare);
+                if (!peer) peer = muxap::ButtonAutomationPeer(nativeShare);
+                auto provider = peer.GetPattern(muxap::PatternInterface::Invoke)
+                                    .try_as<muxapr::IInvokeProvider>();
+                if (!provider) {
+                    BetterPanelSetStatus(weakStatus, L"Share is unavailable");
+                    return;
+                }
+                provider.Invoke();
+            } catch (...) {
+                BetterPanelSetStatus(weakStatus, L"Share is unavailable");
+            }
+        });
+    primaryActions.Children().Append(shareButton);
+    share.Visibility(Visibility::Collapsed);
 
     auto openButton = BetterPanelMakeIconButton(L"Open", L"\uE8E5");
     applyNativeButtonVisual(openButton);
@@ -8959,13 +9596,25 @@ void BetterPanelEnsureShareActions(
         if (content.Children().Size() > 0) {
             content.Children().RemoveAt(0);
         }
+        muxc::Grid openActionIconHost;
+        openActionIconHost.Width(16);
+        openActionIconHost.Height(16);
+
+        muxc::FontIcon openActionFallbackIcon;
+        openActionFallbackIcon.Glyph(L"\uE7C3");
+        openActionFallbackIcon.FontSize(13);
+        state->openActionFallbackIcon =
+            winrt::make_weak(openActionFallbackIcon);
+        openActionIconHost.Children().Append(openActionFallbackIcon);
+
         muxc::Image openActionIcon;
         openActionIcon.Width(16);
         openActionIcon.Height(16);
         openActionIcon.Stretch(
             winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
         state->openActionIcon = winrt::make_weak(openActionIcon);
-        content.Children().InsertAt(0, openActionIcon);
+        openActionIconHost.Children().Append(openActionIcon);
+        content.Children().InsertAt(0, openActionIconHost);
     }
     if (!state->selectedPath.empty()) {
         BetterPanelLoadOpenActionIcon(
@@ -9377,9 +10026,14 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     }
     if (isMultiSelection) {
         BetterPanelLoadMultiSummary(state, activeSelection);
+        BetterPanelPopulateMultiPreview(state, activeSelection);
     } else {
         state->multiSelectionKey.clear();
+        state->multiPreviewKey.clear();
         state->multiSummaryLoading = false;
+        if (auto previewHost = state->multiPreviewHost.get()) {
+            previewHost.Children().Clear();
+        }
         if (auto multiSelectionText = state->multiSelectionText.get()) {
             BetterPanelSetTextIfChanged(multiSelectionText, L"");
         }
@@ -9394,16 +10048,27 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
              (isDirectory && !canDeleteSingleSelection))
                                 ? Visibility::Collapsed
                                 : Visibility::Visible);
-        if (auto shareButton = state->nativeShareButton.get()) {
+        if (auto shareButton = state->shareButton.get()) {
             BetterPanelSetVisibilityIfChanged(
                 shareButton, isDirectory ? Visibility::Collapsed
                                          : Visibility::Visible);
+        }
+        if (auto nativeShare = state->nativeShareButton.get()) {
+            BetterPanelSetVisibilityIfChanged(nativeShare,
+                                               Visibility::Collapsed);
         }
         if (auto deleteButton = state->singleDeleteButton.get()) {
             BetterPanelSetVisibilityIfChanged(
                 deleteButton, canDeleteSingleSelection ? Visibility::Visible
                                                        : Visibility::Collapsed);
         }
+    }
+    if (auto actionsHost = state->actionsHost.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            actionsHost,
+            (isMultiSelection || isHome || isDriveRoot || path.empty())
+                ? Visibility::Collapsed
+                : Visibility::Visible);
     }
 
     auto nativeInfoBanner = state->nativeInfoBanner.get();
@@ -9467,8 +10132,8 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         state->transferCachedSourcePath = state->selectedPath;
     }
     bool hasTransferTarget = !isMultiSelection &&
-                             !state->transferSources.empty() &&
-                             !state->transferDestination.empty();
+                              !state->transferSources.empty() &&
+                              !state->transferDestination.empty();
     bool hasArchiveSource = std::any_of(
         state->transferSources.begin(), state->transferSources.end(),
         [](auto const& source) { return BetterPanelIsArchiveFile(source); });
@@ -9494,18 +10159,46 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         BetterPanelSetVisibilityIfChanged(
             transferMoveButton, hasTransferTarget ? Visibility::Visible
                                                   : Visibility::Collapsed);
+        BetterPanelSetIconButtonLabel(
+            transferMoveButton,
+            hasTransferTarget
+                ? BetterPanelTransferMoveLabel(state->transferSources,
+                                               state->transferDestination)
+                : L"Move to");
     }
-    if (auto destinationText = state->transferDestinationText.get()) {
-        std::wstring destinationName =
-            BetterPanelFileName(state->transferDestination);
-        if (destinationName.empty()) {
-            destinationName = state->transferDestination;
+    std::wstring transferItemsKey;
+    if (hasTransferTarget) {
+        for (auto const& source : state->transferSources) {
+            transferItemsKey += source;
+            transferItemsKey.push_back(L'\n');
         }
-        BetterPanelSetTextIfChanged(
-            destinationText,
-            destinationName.empty() ? L"" : L"\u2192 " + destinationName);
     }
-
+    if (transferItemsKey != state->transferItemsKey) {
+        state->transferItemsKey = transferItemsKey;
+        state->transferItemsExpanded = false;
+        if (auto card = state->transferItemsCard.get()) {
+            card.Visibility(Visibility::Collapsed);
+        }
+    }
+    if (auto toggle = state->transferItemsToggle.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            toggle, hasTransferTarget ? Visibility::Visible
+                                      : Visibility::Collapsed);
+        if (hasTransferTarget) {
+            std::wstring label = state->transferSources.size() == 1
+                ? L"Item being moved"
+                : L"Items being moved (" +
+                      std::to_wstring(state->transferSources.size()) + L")";
+            label += state->transferItemsExpanded ? L"  \u25be" : L"  \u25b8";
+            toggle.Content(winrt::box_value(label));
+        }
+    }
+    if (auto text = state->transferItemsText.get()) {
+        BetterPanelSetTextIfChanged(
+            text, hasTransferTarget
+                      ? BetterPanelTransferItemsText(state->transferSources)
+                      : L"");
+    }
     if (auto extractButton = state->extractButton.get()) {
         BetterPanelSetVisibilityIfChanged(
             extractButton, isArchive && !isMultiSelection
@@ -9670,12 +10363,29 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     if (auto nativePreview = state->nativePreview.get()) {
         BetterPanelSetVisibilityIfChanged(
             nativePreview,
-            (state->previewsCollapsed || isHome)
+            (state->previewsCollapsed || isHome || isMultiSelection)
                 ? Visibility::Collapsed
-                : (!isMultiSelection &&
-                           (isAudio || isVideo || isGif || isText || isPdf)
+                : ((isAudio || isVideo || isGif || isText || isPdf)
                        ? Visibility::Collapsed
                        : Visibility::Visible));
+    }
+    if (auto previewSurface = state->multiPreviewSurface.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            previewSurface,
+            isMultiSelection && !state->previewsCollapsed && !isHome
+                ? Visibility::Visible
+                : Visibility::Collapsed);
+    }
+    if (auto previewHost = state->multiPreviewHost.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            previewHost, isMultiSelection && !state->previewsCollapsed
+                             ? Visibility::Visible
+                             : Visibility::Collapsed);
+    }
+    if (auto previewImage = state->nativePreviewImage.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            previewImage, isMultiSelection ? Visibility::Collapsed
+                                           : Visibility::Visible);
     }
 
     if (path != state->selectedPath) {
@@ -9709,6 +10419,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         state->textOriginal.clear();
         state->textEditable = false;
         state->textDirty = false;
+        state->detectedSyntaxLanguage = BetterPanelSyntaxLanguage::PlainText;
         state->insightsLoading = false;
         state->insightsLoadedPath.clear();
         state->hashValue.clear();
@@ -9747,6 +10458,22 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
         if (auto icon = state->fileIcon.get()) {
             icon.Source(nullptr);
+        }
+        if (auto fallback = state->fileFallbackIcon.get()) {
+            fallback.Glyph(isDirectory ? L"\uE8B7" : L"\uE7C3");
+            fallback.Visibility(Visibility::Visible);
+        }
+        if (auto icon = state->openActionIcon.get()) {
+            icon.Source(nullptr);
+        }
+        if (auto fallback = state->openActionFallbackIcon.get()) {
+            fallback.Visibility(Visibility::Visible);
+        }
+        // Explorer can leave its previous thumbnail in place when the new file
+        // type has no registered preview. Clear it as soon as the selection
+        // changes; Explorer can still supply a fresh thumbnail afterward.
+        if (auto previewImage = state->nativePreviewImage.get()) {
+            previewImage.Source(nullptr);
         }
         if (auto title = state->audioTitle.get()) {
             title.Text(isAudio ? BetterPanelFileName(path) : L"");
@@ -9847,13 +10574,25 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     state->fileTitleRow =
         winrt::make_weak(fileTitleRow.as<FrameworkElement>());
 
+    muxc::Grid fileIconHost;
+    fileIconHost.Width(20);
+    fileIconHost.Height(20);
+    fileIconHost.VerticalAlignment(VerticalAlignment::Center);
+
+    muxc::FontIcon fileFallbackIcon;
+    fileFallbackIcon.Glyph(L"\uE7C3");
+    fileFallbackIcon.FontSize(16);
+    state->fileFallbackIcon = winrt::make_weak(fileFallbackIcon);
+    fileIconHost.Children().Append(fileFallbackIcon);
+
     muxc::Image fileIcon;
     fileIcon.Width(20);
     fileIcon.Height(20);
     fileIcon.Stretch(winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
     fileIcon.VerticalAlignment(VerticalAlignment::Center);
     state->fileIcon = winrt::make_weak(fileIcon);
-    fileTitleRow.Children().Append(fileIcon);
+    fileIconHost.Children().Append(fileIcon);
+    fileTitleRow.Children().Append(fileIconHost);
 
     muxc::TextBlock fileTitle;
     fileTitle.TextTrimming(TextTrimming::CharacterEllipsis);
@@ -9935,13 +10674,16 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
 
     muxc::StackPanel transferRow;
     transferRow.Name(L"BetterDetailPanelTransferActions");
-    transferRow.Orientation(muxc::Orientation::Horizontal);
+    transferRow.Orientation(muxc::Orientation::Vertical);
     transferRow.Spacing(6);
     transferRow.Margin(Thickness{0, 6, 0, 4});
-    transferRow.HorizontalAlignment(HorizontalAlignment::Left);
+    transferRow.HorizontalAlignment(HorizontalAlignment::Stretch);
     transferRow.Visibility(Visibility::Collapsed);
     state->transferRow =
         winrt::make_weak(transferRow.as<FrameworkElement>());
+
+    auto transferButtons = BetterPanelMakeRow();
+    transferButtons.HorizontalAlignment(HorizontalAlignment::Left);
 
     auto transferExtractButton =
         BetterPanelMakeIconButton(L"Extract here", L"\uE8B7");
@@ -9974,10 +10716,18 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
                                  started ? L"Extracting to the open folder"
                                          : L"Select one or more archives");
         });
-    transferRow.Children().Append(transferExtractButton);
+    transferButtons.Children().Append(transferExtractButton);
 
     auto transferMoveButton =
         BetterPanelMakeIconButton(L"Move to", L"\uE8DE");
+    if (auto content = transferMoveButton.Content().try_as<muxc::StackPanel>();
+        content && content.Children().Size() > 1) {
+        if (auto text = content.Children().GetAt(1).try_as<muxc::TextBlock>()) {
+            text.MaxWidth(280);
+            text.TextWrapping(TextWrapping::NoWrap);
+            text.TextTrimming(TextTrimming::CharacterEllipsis);
+        }
+    }
     state->transferMoveButton = winrt::make_weak(transferMoveButton);
     transferMoveButton.Click(
         [weakState, weakStatus](
@@ -10008,24 +10758,72 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
                 });
             if (!queued && state->timer) state->timer.Start();
         });
-    transferRow.Children().Append(transferMoveButton);
+    transferButtons.Children().Append(transferMoveButton);
+    transferRow.Children().Append(transferButtons);
 
-    muxc::TextBlock transferDestinationText;
-    transferDestinationText.FontSize(11);
-    transferDestinationText.Opacity(0.70);
-    transferDestinationText.VerticalAlignment(VerticalAlignment::Center);
-    transferDestinationText.TextTrimming(TextTrimming::CharacterEllipsis);
-    transferDestinationText.MaxWidth(150);
-    state->transferDestinationText =
-        winrt::make_weak(transferDestinationText);
-    transferRow.Children().Append(transferDestinationText);
+    auto transferItemsToggle = BetterPanelMakeButton(L"Items being moved  \u25b8");
+    transferItemsToggle.HorizontalAlignment(HorizontalAlignment::Stretch);
+    transferItemsToggle.HorizontalContentAlignment(HorizontalAlignment::Left);
+    transferItemsToggle.Padding(Thickness{8, 4, 8, 4});
+    transferItemsToggle.FontSize(11);
+    state->transferItemsToggle = winrt::make_weak(transferItemsToggle);
+    transferRow.Children().Append(transferItemsToggle);
+
+    muxc::Border transferItemsCard;
+    transferItemsCard.Padding(Thickness{10, 8, 10, 8});
+    transferItemsCard.CornerRadius(CornerRadius{6});
+    transferItemsCard.Background(
+        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(
+            winrt::Windows::UI::ColorHelper::FromArgb(18, 128, 128, 128)));
+    transferItemsCard.HorizontalAlignment(HorizontalAlignment::Stretch);
+    transferItemsCard.Visibility(Visibility::Collapsed);
+    state->transferItemsCard =
+        winrt::make_weak(transferItemsCard.as<FrameworkElement>());
+
+    muxc::ScrollViewer transferItemsScroll;
+    transferItemsScroll.MaxHeight(160);
+    transferItemsScroll.VerticalScrollBarVisibility(
+        muxc::ScrollBarVisibility::Auto);
+    transferItemsScroll.HorizontalScrollBarVisibility(
+        muxc::ScrollBarVisibility::Disabled);
+    muxc::TextBlock transferItemsText;
+    transferItemsText.FontSize(11);
+    transferItemsText.TextWrapping(TextWrapping::Wrap);
+    transferItemsText.IsTextSelectionEnabled(true);
+    state->transferItemsText = winrt::make_weak(transferItemsText);
+    transferItemsScroll.Content(transferItemsText);
+    transferItemsCard.Child(transferItemsScroll);
+    transferRow.Children().Append(transferItemsCard);
+
+    transferItemsToggle.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (!state) return;
+            state->transferItemsExpanded = !state->transferItemsExpanded;
+            if (auto card = state->transferItemsCard.get()) {
+                card.Visibility(state->transferItemsExpanded
+                                    ? Visibility::Visible
+                                    : Visibility::Collapsed);
+            }
+            if (auto toggle = state->transferItemsToggle.get()) {
+                std::wstring label = state->transferSources.size() == 1
+                    ? L"Item being moved"
+                    : L"Items being moved (" +
+                          std::to_wstring(state->transferSources.size()) +
+                          L")";
+                label += state->transferItemsExpanded ? L"  \u25be"
+                                                      : L"  \u25b8";
+                toggle.Content(winrt::box_value(label));
+            }
+        });
 
     muxc::StackPanel multiActionRow;
     multiActionRow.Name(L"BetterDetailPanelMultiActions");
     multiActionRow.Orientation(muxc::Orientation::Vertical);
     multiActionRow.Spacing(6);
     multiActionRow.Margin(Thickness{0, 6, 0, 4});
-    multiActionRow.HorizontalAlignment(HorizontalAlignment::Left);
+    multiActionRow.HorizontalAlignment(HorizontalAlignment::Stretch);
     multiActionRow.Visibility(Visibility::Collapsed);
     state->multiActionRow =
         winrt::make_weak(multiActionRow.as<FrameworkElement>());
@@ -10038,8 +10836,18 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     state->multiSelectionText = winrt::make_weak(multiSelectionText);
     multiActionRow.Children().Append(multiSelectionText);
 
-    auto multiButtons = BetterPanelMakeRow();
-    multiButtons.HorizontalAlignment(HorizontalAlignment::Left);
+    muxc::Grid multiButtons;
+    multiButtons.HorizontalAlignment(HorizontalAlignment::Stretch);
+    muxc::ColumnDefinition multiPrimaryColumn;
+    multiPrimaryColumn.Width(GridLength{1, GridUnitType::Star});
+    muxc::ColumnDefinition multiDeleteColumn;
+    multiDeleteColumn.Width(GridLength{1, GridUnitType::Auto});
+    multiButtons.ColumnDefinitions().Append(multiPrimaryColumn);
+    multiButtons.ColumnDefinitions().Append(multiDeleteColumn);
+
+    auto multiPrimaryButtons = BetterPanelMakeRow();
+    multiPrimaryButtons.HorizontalAlignment(HorizontalAlignment::Left);
+    multiButtons.Children().Append(multiPrimaryButtons);
 
     auto multiMoveButton =
         BetterPanelMakeIconButton(L"Move to...", L"\uE8DE");
@@ -10071,10 +10879,24 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
                 });
             if (!queued && state->timer) state->timer.Start();
         });
-    multiButtons.Children().Append(multiMoveButton);
+    multiPrimaryButtons.Children().Append(multiMoveButton);
 
-    auto multiDeleteButton =
-        BetterPanelMakeIconButton(L"Delete", L"\uE74D");
+    auto multiDeleteButton = BetterPanelMakeButton(L"");
+    muxc::FontIcon multiDeleteIcon;
+    multiDeleteIcon.Glyph(L"\uE74D");
+    multiDeleteIcon.FontSize(13);
+    multiDeleteButton.Content(multiDeleteIcon);
+    multiDeleteButton.Width(32);
+    multiDeleteButton.Height(32);
+    multiDeleteButton.MinWidth(32);
+    multiDeleteButton.MinHeight(32);
+    multiDeleteButton.Padding(Thickness{0, 0, 0, 0});
+    multiDeleteButton.HorizontalAlignment(HorizontalAlignment::Right);
+    muxc::Grid::SetColumn(multiDeleteButton, 1);
+    muxa::AutomationProperties::SetName(multiDeleteButton,
+                                        L"Move selected items to Recycle Bin");
+    muxc::ToolTipService::SetToolTip(
+        multiDeleteButton, winrt::box_value(L"Move to Recycle Bin"));
     multiDeleteButton.Click(
         [weakState, weakStatus](
             winrt::Windows::Foundation::IInspectable const&,
@@ -10124,7 +10946,7 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
                 weakStatus, SUCCEEDED(result) ? L"Archive creation started"
                                               : L"Archive creation failed");
         });
-    multiButtons.Children().Append(multiArchiveButton);
+    multiPrimaryButtons.Children().Append(multiArchiveButton);
     multiActionRow.Children().Append(multiButtons);
 
     muxc::StackPanel panelUtilities;
@@ -10320,6 +11142,73 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
                 }
             });
         thumbnail.Children().Append(expandButton);
+
+        muxc::Grid multiPreviewSurface;
+        multiPreviewSurface.Name(L"BetterDetailPanelMultiPreviewSurface");
+        double nativeHeight = thumbnail.ActualHeight();
+        if (nativeHeight < 120) nativeHeight = 200;
+        state->multiPreviewNormalHeight = nativeHeight;
+        multiPreviewSurface.Height(nativeHeight);
+        multiPreviewSurface.MinHeight(120);
+        multiPreviewSurface.HorizontalAlignment(HorizontalAlignment::Stretch);
+        multiPreviewSurface.Background(thumbnail.Background());
+        multiPreviewSurface.Visibility(Visibility::Collapsed);
+        state->multiPreviewSurface =
+            winrt::make_weak(multiPreviewSurface.as<FrameworkElement>());
+
+        muxc::Grid multiPreviewHost;
+        multiPreviewHost.Name(L"BetterDetailPanelMultiPreview");
+        multiPreviewHost.HorizontalAlignment(HorizontalAlignment::Center);
+        multiPreviewHost.VerticalAlignment(VerticalAlignment::Center);
+        multiPreviewHost.IsHitTestVisible(false);
+        state->multiPreviewHost = winrt::make_weak(multiPreviewHost);
+        multiPreviewSurface.Children().Append(multiPreviewHost);
+
+        auto multiExpandButton = BetterPanelMakeButton(L"");
+        muxc::FontIcon multiExpandIcon;
+        multiExpandIcon.Glyph(L"\uE740");
+        multiExpandIcon.FontSize(16);
+        multiExpandButton.Content(multiExpandIcon);
+        multiExpandButton.Width(36);
+        multiExpandButton.Height(36);
+        multiExpandButton.MinWidth(36);
+        multiExpandButton.MinHeight(36);
+        multiExpandButton.Padding(Thickness{0});
+        multiExpandButton.HorizontalAlignment(HorizontalAlignment::Right);
+        multiExpandButton.VerticalAlignment(VerticalAlignment::Bottom);
+        multiExpandButton.Margin(Thickness{0, 0, 10, 10});
+        muxc::Canvas::SetZIndex(multiExpandButton, 100);
+        muxa::AutomationProperties::SetName(multiExpandButton,
+                                            L"Expand preview");
+        state->multiPreviewExpandButton =
+            winrt::make_weak(multiExpandButton);
+        auto weakMultiExpandIcon = winrt::make_weak(multiExpandIcon);
+        multiExpandButton.Click(
+            [weakState, weakMultiExpandIcon](auto const&,
+                                             RoutedEventArgs const&) {
+                auto state = weakState.lock();
+                auto surface = state ? state->multiPreviewSurface.get()
+                                     : nullptr;
+                if (!state || !surface) return;
+                state->multiPreviewExpanded = !state->multiPreviewExpanded;
+                surface.Height(state->multiPreviewExpanded
+                                   ? std::clamp(
+                                         state->multiPreviewNormalHeight * 1.65,
+                                         340.0, 520.0)
+                                   : state->multiPreviewNormalHeight);
+                if (auto icon = weakMultiExpandIcon.get()) {
+                    icon.Glyph(state->multiPreviewExpanded ? L"\uE73F"
+                                                           : L"\uE740");
+                }
+            });
+        multiPreviewSurface.Children().Append(multiExpandButton);
+
+        uint32_t thumbnailIndex = 0;
+        if (host.Children().IndexOf(thumbnail.as<UIElement>(),
+                                    thumbnailIndex)) {
+            host.Children().InsertAt(thumbnailIndex + 1,
+                                     multiPreviewSurface);
+        }
         break;
     }
 
@@ -10867,11 +11756,57 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     muxc::StackPanel textContent;
     textContent.Spacing(8);
 
+    muxc::Grid textHeadingRow;
+    muxc::ColumnDefinition textHeadingColumn;
+    textHeadingColumn.Width(GridLength{1, GridUnitType::Star});
+    muxc::ColumnDefinition textLanguageColumn;
+    textLanguageColumn.Width(GridLength{1, GridUnitType::Auto});
+    textHeadingRow.ColumnDefinitions().Append(textHeadingColumn);
+    textHeadingRow.ColumnDefinitions().Append(textLanguageColumn);
+
     muxc::TextBlock textHeading;
     textHeading.Text(L"Text preview");
     textHeading.FontWeight(
         winrt::Microsoft::UI::Text::FontWeights::SemiBold());
-    textContent.Children().Append(textHeading);
+    textHeading.VerticalAlignment(VerticalAlignment::Center);
+    textHeadingRow.Children().Append(textHeading);
+
+    muxc::ComboBox syntaxLanguagePicker;
+    syntaxLanguagePicker.Width(150);
+    syntaxLanguagePicker.Height(32);
+    syntaxLanguagePicker.MinHeight(32);
+    syntaxLanguagePicker.HorizontalAlignment(HorizontalAlignment::Right);
+    syntaxLanguagePicker.VerticalAlignment(VerticalAlignment::Center);
+    muxc::Grid::SetColumn(syntaxLanguagePicker, 1);
+    muxa::AutomationProperties::SetName(syntaxLanguagePicker,
+                                        L"Syntax language");
+    for (auto const& option : kBetterPanelSyntaxOptions) {
+        muxc::ComboBoxItem item;
+        item.Content(winrt::box_value(option.label));
+        syntaxLanguagePicker.Items().Append(item);
+    }
+    syntaxLanguagePicker.SelectedIndex(0);
+    state->syntaxLanguagePicker = winrt::make_weak(syntaxLanguagePicker);
+    syntaxLanguagePicker.SelectionChanged(
+        [weakState](winrt::Windows::Foundation::IInspectable const& sender,
+                    muxc::SelectionChangedEventArgs const&) {
+            auto picker = sender.try_as<muxc::ComboBox>();
+            auto state = weakState.lock();
+            if (!picker || !state) return;
+            int index = picker.SelectedIndex();
+            if (index < 0 ||
+                index >= static_cast<int>(kBetterPanelSyntaxOptions.size()))
+                return;
+            state->syntaxLanguage =
+                kBetterPanelSyntaxOptions[static_cast<size_t>(index)].language;
+            if (auto editor = state->textEditor.get()) {
+                BetterPanelRenderSyntaxPreview(
+                    state, std::wstring(editor.Text().c_str()));
+                BetterPanelUpdateTextControls(state);
+            }
+        });
+    textHeadingRow.Children().Append(syntaxLanguagePicker);
+    textContent.Children().Append(textHeadingRow);
 
     muxc::TextBlock textInfo;
     textInfo.FontSize(11);
@@ -10915,6 +11850,38 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
             state->textDirty = editor.Text() != state->textOriginal;
             BetterPanelUpdateTextControls(state);
         });
+    muxc::Border syntaxPreviewSurface;
+    syntaxPreviewSurface.MinHeight(220);
+    syntaxPreviewSurface.MaxHeight(430);
+    syntaxPreviewSurface.Padding(Thickness{10, 7, 10, 7});
+    syntaxPreviewSurface.CornerRadius(CornerRadius{4});
+    syntaxPreviewSurface.Background(
+        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(
+            winrt::Windows::UI::ColorHelper::FromArgb(24, 128, 128, 128)));
+    syntaxPreviewSurface.BorderBrush(
+        winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(
+            winrt::Windows::UI::ColorHelper::FromArgb(40, 128, 128, 128)));
+    syntaxPreviewSurface.BorderThickness(Thickness{1});
+    state->syntaxPreviewSurface =
+        winrt::make_weak(syntaxPreviewSurface.as<FrameworkElement>());
+
+    muxc::ScrollViewer syntaxPreviewScroll;
+    syntaxPreviewScroll.HorizontalScrollBarVisibility(
+        muxc::ScrollBarVisibility::Auto);
+    syntaxPreviewScroll.VerticalScrollBarVisibility(
+        muxc::ScrollBarVisibility::Auto);
+    muxc::TextBlock syntaxPreview;
+    syntaxPreview.FontFamily(
+        winrt::Microsoft::UI::Xaml::Media::FontFamily(L"Consolas"));
+    syntaxPreview.FontSize(savedTextPreviewSize);
+    syntaxPreview.TextWrapping(TextWrapping::NoWrap);
+    syntaxPreview.IsTextSelectionEnabled(true);
+    state->syntaxPreview = winrt::make_weak(syntaxPreview);
+    syntaxPreviewScroll.Content(syntaxPreview);
+    syntaxPreviewSurface.Child(syntaxPreviewScroll);
+    textContent.Children().Append(syntaxPreviewSurface);
+
+    textEditor.Visibility(Visibility::Collapsed);
     textContent.Children().Append(textEditor);
 
     muxc::Grid textActions;
@@ -11029,6 +11996,9 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
             int size = sizes[index];
             if (auto editor = state->textEditor.get()) {
                 editor.FontSize(size);
+            }
+            if (auto preview = state->syntaxPreview.get()) {
+                preview.FontSize(size);
             }
             Wh_SetIntValue(L"betterPanelTextPreviewSize", size);
         });
@@ -11188,6 +12158,10 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     panel.Children().Append(actionsHost);
     actionsHost.Children().Append(status);
 
+    // Multiple-selection actions belong with the other top-level file actions,
+    // not below the entire Details card.
+    panel.Children().Append(multiActionRow);
+
     // Keep destination actions in the natural viewport immediately below the
     // normal action buttons instead of after Details and Metadata.
     panel.Children().Append(transferRow);
@@ -11260,9 +12234,7 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     copyDetailsButton.MinWidth(32);
     copyDetailsButton.MinHeight(32);
     copyDetailsButton.Padding(Thickness{0, 0, 0, 0});
-    // The Details card has 10 px of inner padding. Extend only this utility
-    // button through that inset so its right edge matches Print and Delete.
-    copyDetailsButton.Margin(Thickness{6, 0, -10, 0});
+    copyDetailsButton.Margin(Thickness{6, 0, 0, 0});
     copyDetailsButton.HorizontalAlignment(HorizontalAlignment::Right);
     copyDetailsButton.VerticalAlignment(VerticalAlignment::Center);
     muxc::Grid::SetColumn(copyDetailsButton, 1);
@@ -11526,7 +12498,6 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     metadataCard.Child(metadataShell);
     panel.Children().Append(metadataCard);
 
-    panel.Children().Append(multiActionRow);
     host.Children().Append(panel);
 
     DispatcherTimer timer;
@@ -11646,6 +12617,7 @@ void TryInstallBetterDetailPanel(FrameworkElement element) {
 std::atomic<bool> g_betterPanelDiscoveryUnloading;
 thread_local winrt::weak_ref<UIElement> g_betterPanelDiscoveryAnchor;
 thread_local bool g_betterPanelDiscoveryQueued = false;
+thread_local bool g_betterPanelResumeRecoveryQueued = false;
 
 bool BetterPanelFindAndInstallDetailsHost(DependencyObject const& root,
                                           int depth = 0) {
@@ -11765,6 +12737,20 @@ void RemoveBetterDetailPanelsForCurrentThread() {
                 }
             }
         }
+        if (auto surface = state->multiPreviewSurface.get()) {
+            auto surfaceParent = winrt::Microsoft::UI::Xaml::Media::
+                VisualTreeHelper::GetParent(surface).try_as<muxc::Panel>();
+            if (surfaceParent) {
+                uint32_t surfaceIndex = 0;
+                if (surfaceParent.Children().IndexOf(surface.as<UIElement>(),
+                                                     surfaceIndex)) {
+                    surfaceParent.Children().RemoveAt(surfaceIndex);
+                }
+            }
+        }
+        if (auto nativePreview = state->nativePreview.get()) {
+            nativePreview.Visibility(Visibility::Visible);
+        }
         auto host = state->host.get();
         auto panel = state->panel.get();
         if (host && panel) {
@@ -11774,18 +12760,8 @@ void RemoveBetterDetailPanelsForCurrentThread() {
             }
         }
         auto share = state->nativeShareButton.get();
-        auto shareParent = state->nativeShareParent.get();
         auto shareRow = state->shareActionRow.get();
-        if (share && shareParent && shareRow) {
-            auto shareContainer = winrt::Microsoft::UI::Xaml::Media::
-                VisualTreeHelper::GetParent(share).try_as<muxc::Panel>();
-            if (shareContainer) {
-                uint32_t shareInContainer = 0;
-                if (shareContainer.Children().IndexOf(
-                        share, shareInContainer)) {
-                    shareContainer.Children().RemoveAt(shareInContainer);
-                }
-            }
+        if (shareRow) {
             auto currentParent = winrt::Microsoft::UI::Xaml::Media::
                 VisualTreeHelper::GetParent(shareRow).try_as<muxc::Panel>();
             if (currentParent) {
@@ -11795,10 +12771,10 @@ void RemoveBetterDetailPanelsForCurrentThread() {
                     currentParent.Children().RemoveAt(rowInCurrentParent);
                 }
             }
+        }
+        if (share) {
             share.Margin(state->nativeShareMargin);
-            uint32_t restoreIndex = std::min(
-                state->nativeShareIndex, shareParent.Children().Size());
-            shareParent.Children().InsertAt(restoreIndex, share);
+            share.Visibility(state->nativeShareVisibility);
         }
         BetterPanelUnwatchNativeDetailsVisibility(state);
         if (auto nativeDetails = state->nativeDetailsSection.get()) {
@@ -11809,6 +12785,38 @@ void RemoveBetterDetailPanelsForCurrentThread() {
         }
         it = g_betterPanels.erase(it);
     }
+}
+
+void BetterPanelHandlePowerMessage(MSG const* message) {
+    if (!message || message->message != WM_POWERBROADCAST ||
+        (message->wParam != PBT_APMRESUMEAUTOMATIC &&
+         message->wParam != PBT_APMRESUMESUSPEND) ||
+        g_betterPanelResumeRecoveryQueued) {
+        return;
+    }
+
+    // Explorer rebuilds the native Details sharing section after resume. Tear
+    // down our pane before Explorer processes that refresh, then reinstall it
+    // after the native popup/view-model work has settled.
+    g_betterPanelResumeRecoveryQueued = true;
+    RemoveBetterDetailPanelsForCurrentThread();
+    BetterPanelInvalidateExplorerQueryCaches();
+    auto dispatcher =
+        winrt::Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread();
+    if (!dispatcher) {
+        g_betterPanelResumeRecoveryQueued = false;
+        return;
+    }
+    auto weakDispatcher = winrt::make_weak(dispatcher);
+    std::thread([weakDispatcher]() {
+        Sleep(1200);
+        if (auto dispatcher = weakDispatcher.get()) {
+            dispatcher.TryEnqueue([] {
+                g_betterPanelResumeRecoveryQueued = false;
+                BetterPanelScheduleCurrentThreadDiscovery();
+            });
+        }
+    }).detach();
 }
 
 // https://stackoverflow.com/a/51274008
@@ -17335,6 +18343,9 @@ void BetterPanelApplyButtonSettingsForCurrentThread() {
             if (auto expand = state->previewExpandButton.get()) {
                 BetterPanelApplyNativeButtonStyle(state, expand);
             }
+            if (auto expand = state->multiPreviewExpandButton.get()) {
+                BetterPanelApplyNativeButtonStyle(state, expand);
+            }
         } catch (winrt::hresult_error const& ex) {
             Wh_Log(L"Live button settings error %08X: %s", ex.code(),
                    ex.message().c_str());
@@ -17494,11 +18505,79 @@ using BetterPanelDetailsPaneControlVM_SelectionUpdated_t =
 BetterPanelDetailsPaneControlVM_SelectionUpdated_t
     BetterPanelDetailsPaneControlVM_SelectionUpdated_Original;
 
+void BetterPanelPrimeMultiSelectionPreviewForCurrentThread() {
+    BetterPanelInvalidateExplorerQueryCaches();
+    std::vector<std::shared_ptr<BetterPanelState>> states;
+    {
+        std::lock_guard lock(g_betterPanelMutex);
+        for (auto const& state : g_betterPanels) {
+            if (state && !state->unloaded && state->dispatcher &&
+                state->dispatcher.HasThreadAccess()) {
+                states.push_back(state);
+            }
+        }
+    }
+
+    for (auto const& state : states) {
+        try {
+            BetterPanelExplorerWindowScope explorerWindowScope(
+                state->explorerWindow);
+            auto paths = BetterPanelGetActiveSelectionPaths();
+            bool multiple = paths.size() > 1;
+            if (auto nativePreview = state->nativePreview.get()) {
+                if (multiple) {
+                    double height = nativePreview.ActualHeight();
+                    if (height >= 120) {
+                        state->multiPreviewNormalHeight = height;
+                        if (auto surface = state->multiPreviewSurface.get();
+                            surface && !state->multiPreviewExpanded) {
+                            surface.Height(height);
+                        }
+                    }
+                }
+                nativePreview.Visibility(
+                    multiple || state->previewsCollapsed
+                        ? Visibility::Collapsed
+                        : Visibility::Visible);
+            }
+            if (auto nativeImage = state->nativePreviewImage.get()) {
+                nativeImage.Visibility(multiple ? Visibility::Collapsed
+                                                : Visibility::Visible);
+            }
+            if (auto surface = state->multiPreviewSurface.get()) {
+                surface.Visibility(multiple && !state->previewsCollapsed
+                                       ? Visibility::Visible
+                                       : Visibility::Collapsed);
+            }
+            if (auto previewHost = state->multiPreviewHost.get()) {
+                if (multiple) {
+                    // Build the fallback stack during Explorer's selection
+                    // callback, before XAML gets a chance to render its blue
+                    // generic multiple-items artwork for a single frame.
+                    BetterPanelPopulateMultiPreview(state, paths);
+                    previewHost.Visibility(state->previewsCollapsed
+                                               ? Visibility::Collapsed
+                                               : Visibility::Visible);
+                } else {
+                    state->multiPreviewKey.clear();
+                    previewHost.Children().Clear();
+                    previewHost.Visibility(Visibility::Collapsed);
+                }
+            }
+        } catch (...) {
+            Wh_Log(L"Immediate multi-selection preview error %08X",
+                   winrt::to_hresult().value);
+        }
+    }
+}
+
 void WINAPI BetterPanelDetailsPaneControlVM_SelectionUpdated_Hook(
     void* pThis, void* selectionSource, void* args) {
     BetterPanelDetailsPaneControlVM_SelectionUpdated_Original(
         pThis, selectionSource, args);
     if (g_betterPanelDiscoveryUnloading) return;
+
+    BetterPanelPrimeMultiSelectionPreviewForCurrentThread();
 
     // Defer one dispatcher turn so IFolderView2 exposes the same selection the
     // native details pane has just accepted.
