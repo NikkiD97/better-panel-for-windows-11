@@ -2,7 +2,7 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         2.2.0
+// @version         2.2.1
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
@@ -44,6 +44,21 @@
     - wobble: Wobble
   $name: Click animation
   $description: Choose how every Better Panel button moves when activated.
+- featureVisibility:
+  - rename: true
+    $name: Rename controls
+    $description: Show single-file rename and multi-file bulk rename controls.
+  - previewSearch: true
+    $name: Preview search
+    $description: Show search, previous match, and next match controls in text and PDF previews.
+  - installActions: true
+    $name: Install actions
+    $description: Show Install for supported font, INF, and REG files.
+  - fileActions: true
+    $name: File actions
+    $description: Show mounting and certificate actions, plus the image preview right-click menu.
+  $name: Feature visibility
+  $description: Hide Better Panel features you do not use. All features are enabled by default.
 - buttonLayout:
   - mode: native
     $name: Layout mode
@@ -186,6 +201,29 @@ Better Panel is maintained as its own package with its own identity, features,
 settings, documentation, changelog, source, and compiled library.
 
 ## Recent changelog
+
+### 2.2.1
+
+* Added bulk rename with prefix, suffix, find and replace, numbering, and a
+  preview before applying.
+* Added search inside text, code, INF, LOG, and PDF previews.
+* Added highlighted text matches and matching-page controls for PDFs.
+* Added Install actions for TTF, OTF, TTC, FON, INF, and REG files.
+* Added File actions for mounting ISO/VHD files and installing certificates.
+* Added a right-click image-preview menu for rotating images and setting
+  wallpaper.
+* Added text preview and editing for INF files.
+* Added settings to hide Rename, preview search, Install, and File actions.
+* Moved the language selector beside preview search.
+* Narrow action rows now move buttons onto new lines instead of cutting them
+  off.
+* Hiding Rename keeps the file name visible but read-only.
+* Hiding preview search keeps the language selector visible.
+* Moved Feature visibility below the animation settings.
+* Video controls stay readable and inside narrow Details panes.
+* File renames now update immediately and the rename box closes when changing
+  folders.
+* Fixed the cross-tab Move item list clipping on drive destinations.
 
 ### 2.2.0
 
@@ -1636,6 +1674,10 @@ struct {
         BetterPanelHoverAnimation::WindowsDefault;
     BetterPanelClickAnimation clickAnimation =
         BetterPanelClickAnimation::WindowsDefault;
+    bool showRename = true;
+    bool showPreviewSearch = true;
+    bool showInstallActions = true;
+    bool showFileActions = true;
 } g_settings;
 
 BackgroundTranslucentEffect g_themeBackgroundTranslucentEffect;
@@ -2035,12 +2077,14 @@ HRESULT InjectWindhawkTAP() noexcept
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <list>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -2085,7 +2129,9 @@ using namespace std::string_view_literals;
 #include <winrt/Microsoft.UI.Xaml.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Graphics.Effects.h>
+#include <winrt/Windows.Media.Ocr.h>
 #include <winrt/Windows.Media.Core.h>
 #include <winrt/Windows.Media.Playback.h>
 #include <winrt/Windows.Data.Pdf.h>
@@ -2648,6 +2694,8 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::Image> openActionIcon;
     winrt::weak_ref<muxc::FontIcon> openActionFallbackIcon;
     winrt::weak_ref<muxc::Button> openWithButton;
+    winrt::weak_ref<muxc::Button> singleInstallButton;
+    winrt::weak_ref<muxc::Button> nativeFileActionsButton;
     winrt::weak_ref<muxc::Button> singleDeleteButton;
     winrt::weak_ref<muxc::Button> extractButton;
     winrt::weak_ref<muxc::Button> previewExpandButton;
@@ -2659,6 +2707,9 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> transferItemsCard;
     winrt::weak_ref<muxc::TextBlock> transferItemsText;
     winrt::weak_ref<FrameworkElement> multiActionRow;
+    winrt::weak_ref<muxc::StackPanel> multiPrimaryActionButtons;
+    winrt::weak_ref<muxc::Button> multiInstallButton;
+    winrt::weak_ref<muxc::Button> multiRenameButton;
     winrt::weak_ref<muxc::TextBlock> multiSelectionText;
     winrt::weak_ref<muxc::Grid> multiPreviewHost;
     winrt::weak_ref<muxc::Button> multiPreviewExpandButton;
@@ -2667,6 +2718,12 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> syntaxPreviewSurface;
     winrt::weak_ref<muxc::TextBlock> syntaxPreview;
     winrt::weak_ref<muxc::ComboBox> syntaxLanguagePicker;
+    winrt::weak_ref<muxc::TextBox> textSearchBox;
+    winrt::weak_ref<FrameworkElement> textSearchRow;
+    winrt::weak_ref<muxc::TextBox> transientFocusedEditor;
+    winrt::weak_ref<muxc::TextBlock> textSearchResult;
+    winrt::weak_ref<muxc::Button> textSearchPreviousButton;
+    winrt::weak_ref<muxc::Button> textSearchNextButton;
     winrt::weak_ref<muxc::Button> textEditButton;
     winrt::weak_ref<muxc::Button> textSaveButton;
     winrt::weak_ref<muxc::Button> textCancelButton;
@@ -2680,11 +2737,20 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::TextBlock> pdfInfo;
     winrt::weak_ref<muxc::Button> pdfPreviousButton;
     winrt::weak_ref<muxc::Button> pdfNextButton;
+    winrt::weak_ref<muxc::TextBox> pdfSearchBox;
+    winrt::weak_ref<FrameworkElement> pdfSearchRow;
+    winrt::weak_ref<muxc::TextBlock> pdfSearchResult;
+    winrt::weak_ref<muxc::Button> pdfSearchButton;
+    winrt::weak_ref<muxc::Button> pdfSearchPreviousButton;
+    winrt::weak_ref<muxc::Button> pdfSearchNextButton;
     winrt::weak_ref<muxc::Button> favoriteButton;
     winrt::weak_ref<muxc::Button> printButton;
     Style nativeButtonStyle{nullptr};
     winrt::weak_ref<muxc::StackPanel> rootPanel;
     winrt::weak_ref<muxc::StackPanel> actionsHost;
+    winrt::weak_ref<FrameworkElement> primaryActionContainer;
+    winrt::weak_ref<muxc::StackPanel> primaryActionButtons;
+    winrt::weak_ref<muxc::StackPanel> transferActionButtons;
     winrt::weak_ref<FrameworkElement> panelUtilities;
     winrt::weak_ref<muxc::Button> previewToggleButton;
     winrt::weak_ref<FrameworkElement> quickAudioControls;
@@ -2735,6 +2801,9 @@ struct BetterPanelState {
         std::numeric_limits<double>::quiet_NaN();
     double previewOriginalMinHeight = 0;
     std::wstring selectedPath;
+    std::wstring pendingRenameOldPath;
+    std::wstring pendingRenameNewPath;
+    ULONGLONG pendingRenameTick = 0;
     ULONGLONG lastNonEmptySelectionTick = 0;
     bool updatingTimeline = false;
     bool updatingVolume = false;
@@ -2759,6 +2828,10 @@ struct BetterPanelState {
     bool textEditing = false;
     bool textDirty = false;
     bool suppressTextChanged = false;
+    bool textSearchActive = false;
+    std::wstring textSearchQuery;
+    std::vector<size_t> textSearchMatches;
+    size_t textSearchMatchIndex = 0;
     BetterPanelSyntaxLanguage syntaxLanguage = BetterPanelSyntaxLanguage::Auto;
     BetterPanelSyntaxLanguage detectedSyntaxLanguage =
         BetterPanelSyntaxLanguage::PlainText;
@@ -2768,6 +2841,10 @@ struct BetterPanelState {
     double pdfZoom = 1.0;
     double pdfBaseWidth = 420;
     bool pdfLoading = false;
+    bool pdfSearchLoading = false;
+    uint64_t pdfSearchGeneration = 0;
+    std::vector<uint32_t> pdfSearchPages;
+    size_t pdfSearchIndex = 0;
     std::wstring insightsLoadedPath;
     std::wstring hashValue;
     std::wstring detailsCopyText;
@@ -3476,6 +3553,7 @@ void BetterPanelSetStatus(winrt::weak_ref<muxc::TextBlock> weakStatus,
 winrt::fire_and_forget BetterPanelShowTemporaryButtonMessage(
     winrt::weak_ref<muxc::Button> weakButton, std::wstring_view text);
 IShellBrowser* BetterPanelGetShellBrowser(HWND window);
+muxc::Image BetterPanelFindPreviewImage(DependencyObject const& root);
 
 void BetterPanelRefreshFavoritesViews(
     std::shared_ptr<BetterPanelState> const& state,
@@ -3703,6 +3781,8 @@ bool BetterPanelConsumeBackspaceMessage(MSG* message) {
                 editor = state->textEditor.get();
             } else if (state->metadataEditing) {
                 editor = state->metadataFocusedEditor.get();
+            } else {
+                editor = state->transientFocusedEditor.get();
             }
             if (editor) {
                 BetterPanelApplyEditorBackspace(editor);
@@ -4246,7 +4326,8 @@ bool BetterPanelIsTextFile(std::wstring_view path) {
         L".txt",        L".md",       L".markdown", L".log",
         L".csv",        L".tsv",      L".json",     L".jsonc",
         L".xml",        L".xaml",     L".yaml",     L".yml",
-        L".ini",        L".cfg",      L".conf",     L".config",
+        L".ini",        L".inf",      L".cfg",      L".conf",
+        L".config",
         L".properties", L".reg",      L".url",      L".bat",
         L".cmd",        L".ps1",      L".psm1",     L".psd1",
         L".sh",         L".py",       L".js",       L".jsx",
@@ -4271,6 +4352,58 @@ bool BetterPanelIsPdfFile(std::wstring_view path) {
     std::transform(extension.begin(), extension.end(), extension.begin(),
                    towlower);
     return extension == L".pdf";
+}
+
+bool BetterPanelIsFontInstallFile(std::wstring_view path) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) return false;
+    std::wstring extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    return extension == L".ttf" || extension == L".otf" ||
+           extension == L".ttc" || extension == L".fon";
+}
+
+bool BetterPanelIsSystemInstallFile(std::wstring_view path) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) return false;
+    std::wstring extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    return extension == L".inf" || extension == L".reg";
+}
+
+bool BetterPanelIsRegistryFile(std::wstring_view path) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) return false;
+    std::wstring extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    return extension == L".reg";
+}
+
+bool BetterPanelCanInstallSelection(
+    std::vector<std::wstring> const& paths) {
+    if (paths.empty()) return false;
+    bool allFonts = std::all_of(paths.begin(), paths.end(), [](auto const& path) {
+        return BetterPanelIsFontInstallFile(path);
+    });
+    return allFonts ||
+           (paths.size() == 1 &&
+            BetterPanelIsSystemInstallFile(paths.front()));
+}
+
+bool BetterPanelHasTypeSpecificNativeActions(std::wstring_view path) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) return false;
+    std::wstring extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    static constexpr std::wstring_view extensions[] = {
+        L".iso", L".vhd", L".vhdx", L".cer", L".crt",
+        L".p7b", L".pfx", L".p12"};
+    return std::find(std::begin(extensions), std::end(extensions),
+                     extension) != std::end(extensions);
 }
 
 bool BetterPanelHasPrintHandler(std::wstring_view path) {
@@ -5562,6 +5695,252 @@ HRESULT BetterPanelInvokeSelectedFavoriteCommand(
     return result;
 }
 
+bool BetterPanelFindContextMenuVerb(HMENU menu, IContextMenu* contextMenu,
+                                    IContextMenu3* contextMenu3,
+                                    IContextMenu2* contextMenu2,
+                                    std::wstring_view requestedVerb,
+                                    UINT& command) {
+    int count = GetMenuItemCount(menu);
+    for (int index = 0; index < count; ++index) {
+        WCHAR label[256]{};
+        MENUITEMINFOW item{sizeof(item)};
+        item.fMask = MIIM_FTYPE | MIIM_STATE | MIIM_ID | MIIM_SUBMENU |
+                     MIIM_STRING;
+        item.dwTypeData = label;
+        item.cch = ARRAYSIZE(label) - 1;
+        if (!GetMenuItemInfoW(menu, index, TRUE, &item) ||
+            (item.fType & MFT_SEPARATOR)) {
+            continue;
+        }
+
+        if (item.hSubMenu) {
+            if (contextMenu3) {
+                LRESULT menuResult = 0;
+                contextMenu3->HandleMenuMsg2(
+                    WM_INITMENUPOPUP,
+                    reinterpret_cast<WPARAM>(item.hSubMenu),
+                    MAKELPARAM(index, FALSE), &menuResult);
+            } else if (contextMenu2) {
+                contextMenu2->HandleMenuMsg(
+                    WM_INITMENUPOPUP,
+                    reinterpret_cast<WPARAM>(item.hSubMenu),
+                    MAKELPARAM(index, FALSE));
+            }
+            if (BetterPanelFindContextMenuVerb(
+                    item.hSubMenu, contextMenu, contextMenu3, contextMenu2,
+                    requestedVerb, command)) {
+                return true;
+            }
+        }
+
+        if (item.wID < 1 || item.wID == static_cast<UINT>(-1) ||
+            (item.fState & (MFS_DISABLED | MFS_GRAYED))) {
+            continue;
+        }
+        WCHAR verb[128]{};
+        bool verbMatches = SUCCEEDED(contextMenu->GetCommandString(
+                               item.wID - 1, GCS_VERBW, nullptr,
+                               reinterpret_cast<LPSTR>(verb),
+                               ARRAYSIZE(verb))) &&
+                           _wcsicmp(
+                               verb,
+                               std::wstring(requestedVerb).c_str()) == 0;
+        std::wstring normalizedLabel(label);
+        normalizedLabel.erase(
+            std::remove(normalizedLabel.begin(), normalizedLabel.end(), L'&'),
+            normalizedLabel.end());
+        while (!normalizedLabel.empty() &&
+               iswspace(normalizedLabel.front())) {
+            normalizedLabel.erase(normalizedLabel.begin());
+        }
+        while (!normalizedLabel.empty() &&
+               iswspace(normalizedLabel.back())) {
+            normalizedLabel.pop_back();
+        }
+        bool labelMatches =
+            _wcsicmp(normalizedLabel.c_str(),
+                     std::wstring(requestedVerb).c_str()) == 0;
+        if (verbMatches || labelMatches) {
+            command = item.wID;
+            return true;
+        }
+    }
+    return false;
+}
+
+HRESULT BetterPanelInvokeSelectedContextMenuVerb(PCWSTR requestedVerb) {
+    auto browser = BetterPanelGetShellBrowser(BetterPanelGetFocusedTabWindow());
+    if (!browser || !requestedVerb || !*requestedVerb) return E_INVALIDARG;
+
+    winrt::com_ptr<IShellView> shellView;
+    HRESULT result = browser->QueryActiveShellView(shellView.put());
+    if (FAILED(result) || !shellView) return result;
+
+    HWND owner = nullptr;
+    shellView->GetWindow(&owner);
+    winrt::com_ptr<IContextMenu> contextMenu;
+    result = shellView->GetItemObject(
+        SVGIO_SELECTION, IID_IContextMenu,
+        reinterpret_cast<void**>(contextMenu.put()));
+    if (FAILED(result) || !contextMenu) return result;
+
+    winrt::com_ptr<IContextMenu3> contextMenu3;
+    contextMenu->QueryInterface(IID_PPV_ARGS(contextMenu3.put()));
+    winrt::com_ptr<IContextMenu2> contextMenu2;
+    if (!contextMenu3) {
+        contextMenu->QueryInterface(IID_PPV_ARGS(contextMenu2.put()));
+    }
+
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return E_OUTOFMEMORY;
+    result = contextMenu->QueryContextMenu(
+        menu, 0, 1, 0x7FFF,
+        CMF_NORMAL | CMF_EXPLORE | CMF_EXTENDEDVERBS |
+            CMF_SYNCCASCADEMENU);
+    UINT command = 0;
+    if (SUCCEEDED(result) && BetterPanelFindContextMenuVerb(
+                                 menu, contextMenu.get(), contextMenu3.get(),
+                                 contextMenu2.get(), requestedVerb, command)) {
+        CMINVOKECOMMANDINFOEX invoke{sizeof(invoke)};
+        invoke.fMask = CMIC_MASK_UNICODE;
+        invoke.hwnd = owner ? owner : GetForegroundWindow();
+        invoke.lpVerb = MAKEINTRESOURCEA(command - 1);
+        invoke.lpVerbW = MAKEINTRESOURCEW(command - 1);
+        invoke.nShow = SW_SHOWNORMAL;
+        result = contextMenu->InvokeCommand(
+            reinterpret_cast<LPCMINVOKECOMMANDINFO>(&invoke));
+    } else if (SUCCEEDED(result)) {
+        result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    }
+    DestroyMenu(menu);
+    return result;
+}
+
+std::wstring BetterPanelNormalizeMenuText(std::wstring value) {
+    value.erase(std::remove(value.begin(), value.end(), L'&'), value.end());
+    while (!value.empty() && iswspace(value.front())) value.erase(value.begin());
+    while (!value.empty() && iswspace(value.back())) value.pop_back();
+    std::transform(value.begin(), value.end(), value.begin(), towlower);
+    return value;
+}
+
+bool BetterPanelMatchesTypeSpecificNativeAction(
+    std::wstring_view path, std::wstring const& rawLabel,
+    std::wstring const& rawVerb) {
+    size_t dot = path.find_last_of(L'.');
+    if (dot == std::wstring_view::npos) return false;
+    std::wstring extension(path.substr(dot));
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   towlower);
+    auto label = BetterPanelNormalizeMenuText(rawLabel);
+    auto verb = BetterPanelNormalizeMenuText(rawVerb);
+    auto contains = [](std::wstring const& value, std::wstring_view part) {
+        return value.find(part) != std::wstring::npos;
+    };
+
+    if (extension == L".iso" || extension == L".vhd" ||
+        extension == L".vhdx") {
+        return verb == L"mount" || label == L"mount";
+    }
+    if (extension == L".cer" || extension == L".crt" ||
+        extension == L".p7b" || extension == L".pfx" ||
+        extension == L".p12") {
+        return contains(verb, L"install") ||
+               contains(label, L"install certificate");
+    }
+    return false;
+}
+
+HRESULT BetterPanelShowTypeSpecificNativeActions(
+    std::wstring const& path) {
+    if (!BetterPanelHasTypeSpecificNativeActions(path)) return E_INVALIDARG;
+    auto browser = BetterPanelGetShellBrowser(BetterPanelGetFocusedTabWindow());
+    if (!browser) return E_FAIL;
+
+    winrt::com_ptr<IShellView> shellView;
+    HRESULT result = browser->QueryActiveShellView(shellView.put());
+    if (FAILED(result) || !shellView) return result;
+    HWND owner = nullptr;
+    shellView->GetWindow(&owner);
+
+    winrt::com_ptr<IContextMenu> contextMenu;
+    result = shellView->GetItemObject(
+        SVGIO_SELECTION, IID_IContextMenu,
+        reinterpret_cast<void**>(contextMenu.put()));
+    if (FAILED(result) || !contextMenu) return result;
+
+    HMENU completeMenu = CreatePopupMenu();
+    HMENU filteredMenu = CreatePopupMenu();
+    if (!completeMenu || !filteredMenu) {
+        if (completeMenu) DestroyMenu(completeMenu);
+        if (filteredMenu) DestroyMenu(filteredMenu);
+        return E_OUTOFMEMORY;
+    }
+    result = contextMenu->QueryContextMenu(
+        completeMenu, 0, 1, 0x7FFF,
+        CMF_NORMAL | CMF_EXPLORE | CMF_EXTENDEDVERBS |
+            CMF_SYNCCASCADEMENU);
+    if (SUCCEEDED(result)) {
+        int count = GetMenuItemCount(completeMenu);
+        for (int index = 0; index < count; ++index) {
+            WCHAR label[256]{};
+            MENUITEMINFOW item{sizeof(item)};
+            item.fMask = MIIM_FTYPE | MIIM_STATE | MIIM_ID | MIIM_STRING |
+                         MIIM_BITMAP;
+            item.dwTypeData = label;
+            item.cch = ARRAYSIZE(label) - 1;
+            if (!GetMenuItemInfoW(completeMenu, index, TRUE, &item) ||
+                (item.fType & MFT_SEPARATOR) || item.wID < 1 ||
+                item.wID == static_cast<UINT>(-1)) {
+                continue;
+            }
+            WCHAR verb[128]{};
+            contextMenu->GetCommandString(
+                item.wID - 1, GCS_VERBW, nullptr,
+                reinterpret_cast<LPSTR>(verb), ARRAYSIZE(verb));
+            if (!BetterPanelMatchesTypeSpecificNativeAction(
+                    path, label, verb)) {
+                continue;
+            }
+            MENUITEMINFOW output{sizeof(output)};
+            output.fMask = MIIM_STRING | MIIM_ID | MIIM_STATE | MIIM_BITMAP;
+            output.dwTypeData = label;
+            output.wID = item.wID;
+            output.fState = item.fState;
+            output.hbmpItem = item.hbmpItem;
+            InsertMenuItemW(filteredMenu, GetMenuItemCount(filteredMenu), TRUE,
+                            &output);
+        }
+    }
+
+    if (GetMenuItemCount(filteredMenu) == 0) {
+        if (SUCCEEDED(result)) result = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+    } else {
+        POINT point{};
+        GetCursorPos(&point);
+        SetForegroundWindow(owner ? owner : GetForegroundWindow());
+        UINT command = TrackPopupMenuEx(
+            filteredMenu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+            point.x, point.y, owner ? owner : GetForegroundWindow(), nullptr);
+        if (command) {
+            CMINVOKECOMMANDINFOEX invoke{sizeof(invoke)};
+            invoke.fMask = CMIC_MASK_UNICODE;
+            invoke.hwnd = owner ? owner : GetForegroundWindow();
+            invoke.lpVerb = MAKEINTRESOURCEA(command - 1);
+            invoke.lpVerbW = MAKEINTRESOURCEW(command - 1);
+            invoke.nShow = SW_SHOWNORMAL;
+            result = contextMenu->InvokeCommand(
+                reinterpret_cast<LPCMINVOKECOMMANDINFO>(&invoke));
+        } else {
+            result = S_FALSE;
+        }
+        PostMessageW(owner ? owner : GetForegroundWindow(), WM_NULL, 0, 0);
+    }
+    DestroyMenu(filteredMenu);
+    DestroyMenu(completeMenu);
+    return result;
+}
+
 std::wstring BetterPanelQuoteCommandArgument(std::wstring_view value) {
     std::wstring quoted = L"\"";
     for (wchar_t character : value) {
@@ -5968,6 +6347,107 @@ HRESULT BetterPanelDeleteItems(
     return aborted ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : S_OK;
 }
 
+struct BetterPanelBulkRenameEntry {
+    std::wstring path;
+    std::wstring oldName;
+    std::wstring newName;
+};
+
+std::wstring BetterPanelBulkRenameName(std::wstring const& path, int mode,
+                                       std::wstring const& first,
+                                       std::wstring const& second,
+                                       size_t index, size_t count) {
+    std::wstring filename = BetterPanelFileName(path);
+    size_t dot = filename.find_last_of(L'.');
+    if (dot == 0) dot = std::wstring::npos;
+    std::wstring stem = dot == std::wstring::npos ? filename
+                                                  : filename.substr(0, dot);
+    std::wstring extension = dot == std::wstring::npos
+                                 ? L""
+                                 : filename.substr(dot);
+    if (mode == 0) return first + stem + extension;
+    if (mode == 1) return stem + first + extension;
+    if (mode == 2) {
+        if (first.empty()) return filename;
+        size_t position = 0;
+        while ((position = stem.find(first, position)) != std::wstring::npos) {
+            stem.replace(position, first.size(), second);
+            position += second.size();
+        }
+        return stem + extension;
+    }
+    int start = _wtoi(second.c_str());
+    if (start < 0) start = 0;
+    size_t lastNumber = static_cast<size_t>(start) + count - 1;
+    size_t width = std::max<size_t>(2, std::to_wstring(lastNumber).size());
+    std::wostringstream number;
+    number << std::setw(static_cast<int>(width)) << std::setfill(L'0')
+           << (static_cast<size_t>(start) + index);
+    std::wstring base = first.empty() ? L"File" : first;
+    return base + L" " + number.str() + extension;
+}
+
+std::vector<BetterPanelBulkRenameEntry> BetterPanelBuildBulkRenameEntries(
+    std::vector<std::wstring> const& paths, int mode,
+    std::wstring const& first, std::wstring const& second, bool& valid) {
+    valid = true;
+    std::vector<BetterPanelBulkRenameEntry> entries;
+    std::set<std::wstring> names;
+    for (size_t index = 0; index < paths.size(); ++index) {
+        BetterPanelBulkRenameEntry entry;
+        entry.path = paths[index];
+        entry.oldName = BetterPanelFileName(entry.path);
+        entry.newName = BetterPanelBulkRenameName(
+            entry.path, mode, first, second, index, paths.size());
+        if (entry.newName.empty() || entry.newName == L"." ||
+            entry.newName == L".." ||
+            entry.newName.find_first_of(L"\\/:*?\"<>|") !=
+                std::wstring::npos ||
+            entry.newName.back() == L'.' || entry.newName.back() == L' ') {
+            valid = false;
+        }
+        std::wstring key = entry.newName;
+        std::transform(key.begin(), key.end(), key.begin(), towlower);
+        if (!names.insert(key).second) valid = false;
+        entries.push_back(std::move(entry));
+    }
+    return entries;
+}
+
+HRESULT BetterPanelBulkRenameItems(
+    std::vector<BetterPanelBulkRenameEntry> const& entries) {
+    if (entries.empty()) return E_INVALIDARG;
+    winrt::com_ptr<IFileOperation> operation;
+    HRESULT result = CoCreateInstance(CLSID_FileOperation, nullptr,
+                                      CLSCTX_INPROC_SERVER,
+                                      IID_PPV_ARGS(operation.put()));
+    if (FAILED(result)) return result;
+    operation->SetOwnerWindow(GetForegroundWindow());
+    operation->SetOperationFlags(FOF_ALLOWUNDO | FOFX_SHOWELEVATIONPROMPT |
+                                 FOFX_ADDUNDORECORD |
+                                 FOFX_PRESERVEFILEEXTENSIONS);
+    size_t renameCount = 0;
+    for (auto const& entry : entries) {
+        if (_wcsicmp(entry.oldName.c_str(), entry.newName.c_str()) == 0) {
+            continue;
+        }
+        winrt::com_ptr<IShellItem> item;
+        result = SHCreateItemFromParsingName(entry.path.c_str(), nullptr,
+                                             IID_PPV_ARGS(item.put()));
+        if (FAILED(result)) return result;
+        result = operation->RenameItem(item.get(), entry.newName.c_str(),
+                                       nullptr);
+        if (FAILED(result)) return result;
+        ++renameCount;
+    }
+    if (!renameCount) return S_FALSE;
+    result = operation->PerformOperations();
+    if (FAILED(result)) return result;
+    BOOL aborted = FALSE;
+    operation->GetAnyOperationsAborted(&aborted);
+    return aborted ? HRESULT_FROM_WIN32(ERROR_CANCELLED) : S_OK;
+}
+
 std::wstring BetterPanelFindArchiveCreator() {
     WCHAR programFiles[MAX_PATH]{};
     WCHAR programFilesX86[MAX_PATH]{};
@@ -6210,7 +6690,8 @@ BetterPanelSyntaxLanguage BetterPanelDetectSyntaxLanguage(
         extension == L".less") return BetterPanelSyntaxLanguage::Css;
     if (extension == L".yaml" || extension == L".yml")
         return BetterPanelSyntaxLanguage::Yaml;
-    if (extension == L".ini" || extension == L".cfg" ||
+    if (extension == L".ini" || extension == L".inf" ||
+        extension == L".cfg" ||
         extension == L".conf") return BetterPanelSyntaxLanguage::Ini;
     if (extension == L".bat" || extension == L".cmd")
         return BetterPanelSyntaxLanguage::Batch;
@@ -6464,12 +6945,14 @@ void BetterPanelUpdateTextControls(
     auto editor = state->textEditor.get();
     if (editor) {
         editor.IsReadOnly(!state->textEditing);
-        editor.Visibility(state->textEditing ? Visibility::Visible
-                                             : Visibility::Collapsed);
+        editor.Visibility(state->textEditing || state->textSearchActive
+                              ? Visibility::Visible
+                              : Visibility::Collapsed);
     }
     if (auto preview = state->syntaxPreviewSurface.get()) {
-        preview.Visibility(state->textEditing ? Visibility::Collapsed
-                                              : Visibility::Visible);
+        preview.Visibility(state->textEditing || state->textSearchActive
+                               ? Visibility::Collapsed
+                               : Visibility::Visible);
     }
     if (auto button = state->textEditButton.get()) {
         button.Visibility(state->textEditable && !state->textEditing
@@ -6514,6 +6997,82 @@ void BetterPanelUpdateTextControls(
         } else {
             info.Text(L"");
         }
+    }
+}
+
+void BetterPanelUpdateTextSearch(
+    std::shared_ptr<BetterPanelState> const& state, int direction,
+    bool rebuildMatches) {
+    auto search = state ? state->textSearchBox.get() : nullptr;
+    auto editor = state ? state->textEditor.get() : nullptr;
+    if (!state || !search || !editor) return;
+    std::wstring query = search.Text().c_str();
+    if (query.empty()) {
+        state->textSearchActive = false;
+        state->textSearchQuery.clear();
+        state->textSearchMatches.clear();
+        state->textSearchMatchIndex = 0;
+        if (auto result = state->textSearchResult.get()) result.Text(L"");
+        if (auto button = state->textSearchPreviousButton.get())
+            button.IsEnabled(false);
+        if (auto button = state->textSearchNextButton.get())
+            button.IsEnabled(false);
+        BetterPanelUpdateTextControls(state);
+        return;
+    }
+
+    std::wstring text = editor.Text().c_str();
+    rebuildMatches = rebuildMatches || query != state->textSearchQuery;
+    if (rebuildMatches) {
+        state->textSearchQuery = query;
+        state->textSearchMatches.clear();
+        std::wstring lowerText = text;
+        std::wstring lowerQuery = query;
+        std::transform(lowerText.begin(), lowerText.end(), lowerText.begin(),
+                       towlower);
+        std::transform(lowerQuery.begin(), lowerQuery.end(),
+                       lowerQuery.begin(), towlower);
+        size_t position = 0;
+        while (position < lowerText.size() &&
+               state->textSearchMatches.size() < 10000) {
+            position = lowerText.find(lowerQuery, position);
+            if (position == std::wstring::npos) break;
+            state->textSearchMatches.push_back(position);
+            position += std::max<size_t>(1, lowerQuery.size());
+        }
+        state->textSearchMatchIndex = 0;
+    } else if (!state->textSearchMatches.empty()) {
+        if (direction < 0) {
+            state->textSearchMatchIndex =
+                state->textSearchMatchIndex == 0
+                    ? state->textSearchMatches.size() - 1
+                    : state->textSearchMatchIndex - 1;
+        } else if (direction > 0) {
+            state->textSearchMatchIndex =
+                (state->textSearchMatchIndex + 1) %
+                state->textSearchMatches.size();
+        }
+    }
+
+    state->textSearchActive = true;
+    bool found = !state->textSearchMatches.empty();
+    if (auto result = state->textSearchResult.get()) {
+        result.Text(found ? std::to_wstring(state->textSearchMatchIndex + 1) +
+                                L" of " +
+                                std::to_wstring(state->textSearchMatches.size())
+                          : L"No matches");
+    }
+    if (auto button = state->textSearchPreviousButton.get())
+        button.IsEnabled(found);
+    if (auto button = state->textSearchNextButton.get())
+        button.IsEnabled(found);
+    BetterPanelUpdateTextControls(state);
+    if (found) {
+        editor.Focus(FocusState::Programmatic);
+        editor.Select(
+            static_cast<int32_t>(
+                state->textSearchMatches[state->textSearchMatchIndex]),
+            static_cast<int32_t>(query.size()));
     }
 }
 
@@ -6565,6 +7124,9 @@ void BetterPanelLoadTextPreview(
                 BetterPanelRenderSyntaxPreview(
                     state, data.success ? data.text : data.message);
                 BetterPanelUpdateTextControls(state);
+                if (state->textSearchActive) {
+                    BetterPanelUpdateTextSearch(state, 0, true);
+                }
                 if (!data.message.empty()) {
                     if (auto info = state->textInfo.get()) {
                         std::wstring existing = info.Text().c_str();
@@ -6753,6 +7315,118 @@ winrt::fire_and_forget BetterPanelLoadOpenActionIcon(
         Wh_Log(L"Open action icon error %08X: %s", ex.code(),
                ex.message().c_str());
     }
+}
+
+winrt::fire_and_forget BetterPanelLoadNativeImagePreview(
+    std::weak_ptr<BetterPanelState> weakState,
+    std::wstring path) {
+    try {
+        auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+        auto stream = co_await file.OpenAsync(ws::FileAccessMode::Read);
+        winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap;
+        co_await bitmap.SetSourceAsync(stream);
+        auto state = weakState.lock();
+        if (!state || state->unloaded || state->selectedPath != path) co_return;
+        muxc::Image preview{nullptr};
+        if (auto surface = state->nativePreview.get()) {
+            preview = BetterPanelFindPreviewImage(surface);
+        }
+        if (!preview) preview = state->nativePreviewImage.get();
+        if (preview) {
+            state->nativePreviewImage = winrt::make_weak(preview);
+            preview.Source(nullptr);
+            preview.Source(bitmap);
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Image preview reload error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
+void BetterPanelQueueNativeImageRefresh(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::wstring const& path,
+    uint64_t originalSize,
+    FILETIME originalWriteTime) {
+    if (!state || path.empty()) return;
+    auto weakState = std::weak_ptr<BetterPanelState>(state);
+    auto dispatcher = state->dispatcher;
+    std::thread([weakState, dispatcher, path, originalSize,
+                 originalWriteTime]() {
+        for (int attempt = 0; attempt < 50; ++attempt) {
+            Sleep(100);
+            uint64_t size = 0;
+            FILETIME writeTime{};
+            if (!BetterPanelGetFileStamp(path, size, writeTime) ||
+                (size == originalSize &&
+                 CompareFileTime(&writeTime, &originalWriteTime) == 0)) {
+                continue;
+            }
+            // The file has changed. Give the writer a moment to close it, then
+            // invalidate the Shell thumbnail and update the current preview.
+            Sleep(100);
+            SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW | SHCNF_FLUSH,
+                           path.c_str(), nullptr);
+            dispatcher.TryEnqueue([weakState, path]() {
+                auto state = weakState.lock();
+                if (!state || state->unloaded || state->selectedPath != path)
+                    return;
+                BetterPanelLoadNativeImagePreview(weakState, path);
+            });
+            break;
+        }
+    }).detach();
+}
+
+void BetterPanelShowImageActionsFlyout(
+    std::shared_ptr<BetterPanelState> const& state,
+    FrameworkElement const& anchor,
+    winrt::Windows::Foundation::Point const& position,
+    winrt::weak_ref<muxc::TextBlock> weakStatus) {
+    if (!state || !anchor || !g_settings.showFileActions ||
+        !BetterPanelIsImageFile(state->selectedPath))
+        return;
+    std::wstring path = state->selectedPath;
+    auto weakState = std::weak_ptr<BetterPanelState>(state);
+    muxc::MenuFlyout flyout;
+    auto addAction = [&](PCWSTR label, PCWSTR verb, bool reloadImage) {
+        muxc::MenuFlyoutItem item;
+        item.Text(label);
+        std::wstring actionVerb = verb;
+        item.Click(
+            [weakState, weakStatus, path, actionVerb, reloadImage](
+                winrt::Windows::Foundation::IInspectable const&,
+                RoutedEventArgs const&) {
+                auto state = weakState.lock();
+                if (!state || state->selectedPath != path) return;
+                uint64_t originalSize = 0;
+                FILETIME originalWriteTime{};
+                BetterPanelGetFileStamp(path, originalSize,
+                                        originalWriteTime);
+                HRESULT result = BetterPanelInvokeSelectedContextMenuVerb(
+                    actionVerb.c_str());
+                if (result == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
+                    BetterPanelSetStatus(weakStatus,
+                                         L"This image action isn't available");
+                } else if (FAILED(result)) {
+                    BetterPanelSetStatus(weakStatus, L"Image action failed");
+                } else {
+                    BetterPanelSetStatus(weakStatus, L"");
+                    if (reloadImage) {
+                        BetterPanelQueueNativeImageRefresh(
+                            state, path, originalSize, originalWriteTime);
+                    }
+                }
+            });
+        flyout.Items().Append(item);
+    };
+    // These built-in image commands often expose only their visible Shell
+    // labels and no canonical verb on current Windows 11 builds.
+    addAction(L"Set as desktop background", L"Set as desktop background",
+              false);
+    addAction(L"Rotate right", L"Rotate right", true);
+    addAction(L"Rotate left", L"Rotate left", true);
+    flyout.ShowAt(anchor, position);
 }
 
 winrt::fire_and_forget BetterPanelLoadHomeLocationIcon(
@@ -7087,6 +7761,154 @@ winrt::fire_and_forget BetterPanelRenderPdfPage(
     }
 }
 
+void BetterPanelUpdatePdfSearchControls(
+    std::shared_ptr<BetterPanelState> const& state) {
+    bool hasResults = !state->pdfSearchPages.empty();
+    if (auto button = state->pdfSearchButton.get()) {
+        button.IsEnabled(!state->pdfSearchLoading && state->pdfDocument != nullptr);
+    }
+    if (auto previous = state->pdfSearchPreviousButton.get()) {
+        previous.IsEnabled(!state->pdfSearchLoading && hasResults);
+    }
+    if (auto next = state->pdfSearchNextButton.get()) {
+        next.IsEnabled(!state->pdfSearchLoading && hasResults);
+    }
+}
+
+void BetterPanelShowPdfSearchMatch(
+    std::shared_ptr<BetterPanelState> const& state,
+    std::weak_ptr<BetterPanelState> weakState,
+    int direction) {
+    if (state->pdfSearchPages.empty() || state->pdfSearchLoading) return;
+    if (direction < 0) {
+        state->pdfSearchIndex = state->pdfSearchIndex == 0
+                                    ? state->pdfSearchPages.size() - 1
+                                    : state->pdfSearchIndex - 1;
+    } else if (direction > 0) {
+        state->pdfSearchIndex =
+            (state->pdfSearchIndex + 1) % state->pdfSearchPages.size();
+    }
+    state->pdfPageIndex = state->pdfSearchPages[state->pdfSearchIndex];
+    if (auto result = state->pdfSearchResult.get()) {
+        result.Text(std::to_wstring(state->pdfSearchIndex + 1) + L" of " +
+                    std::to_wstring(state->pdfSearchPages.size()));
+    }
+    BetterPanelUpdatePdfControls(state);
+    BetterPanelRenderPdfPage(weakState, state->selectedPath,
+                             state->pdfPageIndex, state->pdfZoom);
+}
+
+winrt::fire_and_forget BetterPanelSearchPdf(
+    std::weak_ptr<BetterPanelState> weakState,
+    std::wstring path,
+    std::wstring query) {
+    auto state = weakState.lock();
+    if (!state || !state->pdfDocument || state->selectedPath != path) co_return;
+    auto first = query.find_first_not_of(L" \t\r\n");
+    if (first == std::wstring::npos) {
+        query.clear();
+    } else {
+        query = query.substr(first, query.find_last_not_of(L" \t\r\n") - first + 1);
+    }
+    if (query.empty()) {
+        state->pdfSearchPages.clear();
+        if (auto result = state->pdfSearchResult.get()) result.Text(L"");
+        BetterPanelUpdatePdfSearchControls(state);
+        co_return;
+    }
+
+    uint64_t generation = ++state->pdfSearchGeneration;
+    auto document = state->pdfDocument;
+    uint32_t pageCount = document.PageCount();
+    state->pdfSearchLoading = true;
+    state->pdfSearchPages.clear();
+    state->pdfSearchIndex = 0;
+    if (auto result = state->pdfSearchResult.get()) result.Text(L"Starting…");
+    BetterPanelUpdatePdfSearchControls(state);
+
+    std::transform(query.begin(), query.end(), query.begin(), towlower);
+    try {
+        auto ocr = winrt::Windows::Media::Ocr::OcrEngine::
+            TryCreateFromUserProfileLanguages();
+        if (!ocr) {
+            if (auto result = state->pdfSearchResult.get()) {
+                result.Text(L"PDF search unavailable");
+            }
+        } else {
+            uint32_t maxDimension =
+                winrt::Windows::Media::Ocr::OcrEngine::MaxImageDimension();
+            for (uint32_t index = 0; index < pageCount; ++index) {
+                state = weakState.lock();
+                if (!state || state->selectedPath != path ||
+                    state->pdfSearchGeneration != generation) {
+                    co_return;
+                }
+                if (auto result = state->pdfSearchResult.get()) {
+                    result.Text(L"Searching " + std::to_wstring(index + 1) +
+                                L" of " + std::to_wstring(pageCount) + L"…");
+                }
+
+                auto page = document.GetPage(index);
+                auto box = page.Dimensions().MediaBox();
+                double scale = 1400.0 / std::max(1.0f, box.Width);
+                uint32_t width = static_cast<uint32_t>(std::clamp(
+                    static_cast<double>(box.Width) * scale, 1.0,
+                    static_cast<double>(maxDimension)));
+                uint32_t height = static_cast<uint32_t>(std::clamp(
+                    static_cast<double>(box.Height) * scale, 1.0,
+                    static_cast<double>(maxDimension)));
+                wdp::PdfPageRenderOptions options;
+                options.DestinationWidth(width);
+                options.DestinationHeight(height);
+                wss::InMemoryRandomAccessStream stream;
+                co_await page.RenderToStreamAsync(stream, options);
+                page.Close();
+                stream.Seek(0);
+                auto decoder = co_await winrt::Windows::Graphics::Imaging::
+                    BitmapDecoder::CreateAsync(stream);
+                auto bitmap = co_await decoder.GetSoftwareBitmapAsync(
+                    winrt::Windows::Graphics::Imaging::BitmapPixelFormat::Bgra8,
+                    winrt::Windows::Graphics::Imaging::BitmapAlphaMode::Premultiplied);
+                auto ocrResult = co_await ocr.RecognizeAsync(bitmap);
+                std::wstring pageText = ocrResult.Text().c_str();
+                std::transform(pageText.begin(), pageText.end(), pageText.begin(),
+                               towlower);
+                if (pageText.find(query) != std::wstring::npos) {
+                    state = weakState.lock();
+                    if (!state || state->selectedPath != path ||
+                        state->pdfSearchGeneration != generation) {
+                        co_return;
+                    }
+                    state->pdfSearchPages.push_back(index);
+                }
+            }
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"PDF search error %08X: %s", ex.code(), ex.message().c_str());
+        state = weakState.lock();
+        if (state && state->selectedPath == path &&
+            state->pdfSearchGeneration == generation) {
+            if (auto result = state->pdfSearchResult.get()) {
+                result.Text(L"PDF search unavailable");
+            }
+        }
+    }
+
+    state = weakState.lock();
+    if (!state || state->selectedPath != path ||
+        state->pdfSearchGeneration != generation) {
+        co_return;
+    }
+    state->pdfSearchLoading = false;
+    BetterPanelUpdatePdfSearchControls(state);
+    if (state->pdfSearchPages.empty()) {
+        if (auto result = state->pdfSearchResult.get()) result.Text(L"No matches");
+    } else {
+        state->pdfSearchIndex = 0;
+        BetterPanelShowPdfSearchMatch(state, weakState, 0);
+    }
+}
+
 winrt::fire_and_forget BetterPanelLoadPdf(
     std::weak_ptr<BetterPanelState> weakState,
     std::wstring path) {
@@ -7106,6 +7928,7 @@ winrt::fire_and_forget BetterPanelLoadPdf(
                                              260.0, 680.0);
         }
         BetterPanelUpdatePdfControls(state);
+        BetterPanelUpdatePdfSearchControls(state);
         BetterPanelRenderPdfPage(weakState, path, 0, state->pdfZoom);
     } catch (winrt::hresult_error const& ex) {
         auto state = weakState.lock();
@@ -7117,6 +7940,7 @@ winrt::fire_and_forget BetterPanelLoadPdf(
                 info.Visibility(Visibility::Visible);
             }
             BetterPanelUpdatePdfControls(state);
+            BetterPanelUpdatePdfSearchControls(state);
         }
         Wh_Log(L"PDF load error %08X: %s", ex.code(), ex.message().c_str());
     }
@@ -8942,6 +9766,214 @@ winrt::fire_and_forget BetterPanelShowLargePreview(
     }
 }
 
+void BetterPanelUpdateBulkRenameDialog(
+    std::vector<std::wstring> const& paths,
+    winrt::weak_ref<muxc::ComboBox> weakMode,
+    winrt::weak_ref<muxc::TextBox> weakFirst,
+    winrt::weak_ref<muxc::TextBox> weakSecond,
+    winrt::weak_ref<muxc::TextBlock> weakPreview,
+    winrt::weak_ref<muxc::ContentDialog> weakDialog) {
+    auto modePicker = weakMode.get();
+    auto firstBox = weakFirst.get();
+    auto secondBox = weakSecond.get();
+    auto preview = weakPreview.get();
+    auto dialog = weakDialog.get();
+    if (!modePicker || !firstBox || !secondBox || !preview || !dialog) return;
+    int mode = std::max(0, modePicker.SelectedIndex());
+    if (mode == 0) {
+        firstBox.Header(winrt::box_value(L"Prefix"));
+        secondBox.Visibility(Visibility::Collapsed);
+    } else if (mode == 1) {
+        firstBox.Header(winrt::box_value(L"Suffix"));
+        secondBox.Visibility(Visibility::Collapsed);
+    } else if (mode == 2) {
+        firstBox.Header(winrt::box_value(L"Find"));
+        secondBox.Header(winrt::box_value(L"Replace with"));
+        secondBox.Visibility(Visibility::Visible);
+    } else {
+        firstBox.Header(winrt::box_value(L"Base name"));
+        secondBox.Header(winrt::box_value(L"Starting number"));
+        secondBox.Visibility(Visibility::Visible);
+    }
+
+    std::wstring first = firstBox.Text().c_str();
+    std::wstring second = secondBox.Text().c_str();
+    bool valid = true;
+    auto entries = BetterPanelBuildBulkRenameEntries(
+        paths, mode, first, second, valid);
+    bool changed = false;
+    std::wstring text;
+    size_t shown = std::min<size_t>(entries.size(), 14);
+    for (size_t index = 0; index < shown; ++index) {
+        changed = changed ||
+                  _wcsicmp(entries[index].oldName.c_str(),
+                           entries[index].newName.c_str()) != 0;
+        text += entries[index].oldName + L"  →  " +
+                entries[index].newName + L"\n";
+    }
+    if (entries.size() > shown) {
+        text += L"+ " + std::to_wstring(entries.size() - shown) +
+                L" more\n";
+    }
+    if (!valid) text += L"\nOne or more resulting names aren't valid.";
+    preview.Text(text);
+    bool hasRequiredText = mode == 3 || !first.empty();
+    dialog.IsPrimaryButtonEnabled(valid && changed && hasRequiredText);
+}
+
+winrt::fire_and_forget BetterPanelShowBulkRenameDialog(
+    std::weak_ptr<BetterPanelState> weakState) {
+    auto state = weakState.lock();
+    if (!state || state->unloaded) co_return;
+    auto paths = BetterPanelGetActiveSelectionPaths(false);
+    if (paths.size() < 2) {
+        BetterPanelSetStatus(state->status, L"Select multiple items first");
+        co_return;
+    }
+    auto anchor = state->panel.get();
+    if (!anchor || !anchor.XamlRoot()) co_return;
+
+    try {
+        muxc::StackPanel content;
+        content.Spacing(8);
+
+        muxc::ComboBox modePicker;
+        modePicker.Header(winrt::box_value(L"Rename style"));
+        modePicker.HorizontalAlignment(HorizontalAlignment::Stretch);
+        for (PCWSTR label : {L"Add prefix", L"Add suffix",
+                             L"Find and replace", L"Numbering"}) {
+            muxc::ComboBoxItem item;
+            item.Content(winrt::box_value(label));
+            modePicker.Items().Append(item);
+        }
+        modePicker.SelectedIndex(0);
+        content.Children().Append(modePicker);
+
+        muxc::TextBox firstBox;
+        firstBox.HorizontalAlignment(HorizontalAlignment::Stretch);
+        content.Children().Append(firstBox);
+        muxc::TextBox secondBox;
+        secondBox.HorizontalAlignment(HorizontalAlignment::Stretch);
+        secondBox.Text(L"1");
+        secondBox.Visibility(Visibility::Collapsed);
+        content.Children().Append(secondBox);
+        auto trackBulkRenameFocus = [weakState](muxc::TextBox const& box) {
+            box.GotFocus(
+                [weakState](winrt::Windows::Foundation::IInspectable const& sender,
+                            RoutedEventArgs const&) {
+                    auto state = weakState.lock();
+                    auto editor = sender.try_as<muxc::TextBox>();
+                    if (state && editor) {
+                        state->transientFocusedEditor = winrt::make_weak(editor);
+                    }
+                });
+            box.LostFocus(
+                [weakState](winrt::Windows::Foundation::IInspectable const&,
+                            RoutedEventArgs const&) {
+                    if (auto state = weakState.lock()) {
+                        state->transientFocusedEditor = {};
+                    }
+                });
+        };
+        trackBulkRenameFocus(firstBox);
+        trackBulkRenameFocus(secondBox);
+
+        muxc::TextBlock previewHeading;
+        previewHeading.Text(L"Preview");
+        previewHeading.FontWeight(
+            winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+        content.Children().Append(previewHeading);
+        muxc::TextBlock preview;
+        preview.FontFamily(winrt::Microsoft::UI::Xaml::Media::FontFamily(
+            L"Cascadia Mono, Consolas"));
+        preview.FontSize(11);
+        preview.TextWrapping(TextWrapping::Wrap);
+        muxc::ScrollViewer previewScroll;
+        previewScroll.MaxHeight(240);
+        previewScroll.VerticalScrollBarVisibility(
+            muxc::ScrollBarVisibility::Auto);
+        previewScroll.Content(preview);
+        content.Children().Append(previewScroll);
+
+        muxc::ContentDialog dialog;
+        dialog.XamlRoot(anchor.XamlRoot());
+        dialog.Title(winrt::box_value(
+            L"Rename " + std::to_wstring(paths.size()) + L" items"));
+        dialog.Content(content);
+        dialog.PrimaryButtonText(L"Rename");
+        dialog.CloseButtonText(L"Cancel");
+        dialog.DefaultButton(muxc::ContentDialogButton::Primary);
+
+        auto weakMode = winrt::make_weak(modePicker);
+        auto weakFirst = winrt::make_weak(firstBox);
+        auto weakSecond = winrt::make_weak(secondBox);
+        auto weakPreview = winrt::make_weak(preview);
+        auto weakDialog = winrt::make_weak(dialog);
+        auto update = [paths, weakMode, weakFirst, weakSecond, weakPreview,
+                       weakDialog](auto const&, auto const&) {
+            BetterPanelUpdateBulkRenameDialog(
+                paths, weakMode, weakFirst, weakSecond, weakPreview,
+                weakDialog);
+        };
+        modePicker.SelectionChanged(update);
+        firstBox.TextChanged(update);
+        secondBox.TextChanged(update);
+        BetterPanelUpdateBulkRenameDialog(paths, weakMode, weakFirst,
+                                          weakSecond, weakPreview, weakDialog);
+
+        auto dialogResult = co_await dialog.ShowAsync();
+        if (auto current = weakState.lock()) {
+            current->transientFocusedEditor = {};
+        }
+        if (dialogResult != muxc::ContentDialogResult::Primary) co_return;
+        bool valid = true;
+        auto entries = BetterPanelBuildBulkRenameEntries(
+            paths, std::max(0, modePicker.SelectedIndex()),
+            std::wstring(firstBox.Text().c_str()),
+            std::wstring(secondBox.Text().c_str()), valid);
+        if (!valid) {
+            BetterPanelSetStatus(state->status, L"The new names aren't valid");
+            co_return;
+        }
+        if (state->timer) state->timer.Stop();
+        HRESULT result = BetterPanelBulkRenameItems(entries);
+        BetterPanelInvalidateExplorerQueryCaches();
+        if (result == S_OK) {
+            std::wstring refreshFolder;
+            for (auto const& entry : entries) {
+                if (_wcsicmp(entry.oldName.c_str(), entry.newName.c_str()) == 0) {
+                    continue;
+                }
+                size_t slash = entry.path.find_last_of(L"\\/");
+                if (slash == std::wstring::npos) continue;
+                std::wstring folder = entry.path.substr(0, slash);
+                std::wstring newPath = folder + L"\\" + entry.newName;
+                SHChangeNotify(SHCNE_RENAMEITEM,
+                               SHCNF_PATHW | SHCNF_FLUSH,
+                               entry.path.c_str(), newPath.c_str());
+                if (refreshFolder.empty()) refreshFolder = std::move(folder);
+            }
+            if (!refreshFolder.empty()) {
+                BetterPanelRefreshFavoritesViews(state, refreshFolder);
+            }
+        }
+        if (state->timer) state->timer.Start();
+        BetterPanelSetStatus(
+            state->status,
+            result == S_OK ? L"Bulk rename completed"
+                           : (result == S_FALSE ? L"Nothing was renamed"
+                                                : L"Bulk rename failed"));
+        BetterPanelRefresh(state);
+    } catch (winrt::hresult_error const& ex) {
+        if (auto current = weakState.lock()) {
+            current->transientFocusedEditor = {};
+            BetterPanelSetStatus(current->status, L"Bulk rename unavailable");
+        }
+        Wh_Log(L"Bulk rename dialog error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
 muxc::Image BetterPanelFindPreviewImage(DependencyObject const& root) {
     if (!root) {
         return nullptr;
@@ -8992,6 +10024,54 @@ muxc::StackPanel BetterPanelMakeRow() {
     row.Orientation(muxc::Orientation::Horizontal);
     row.Spacing(6);
     return row;
+}
+
+void BetterPanelUpdateActionWrapping(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state) return;
+    auto fit = [](muxc::StackPanel const& buttons,
+                  FrameworkElement const& container,
+                  double reservedWidth) {
+        if (!buttons || !container || container.ActualWidth() < 1) return;
+        double required = 0;
+        size_t visibleCount = 0;
+        for (auto const& child : buttons.Children()) {
+            auto element = child.try_as<FrameworkElement>();
+            if (!element || element.Visibility() != Visibility::Visible)
+                continue;
+            double width = element.ActualWidth();
+            if (width < 1) width = element.DesiredSize().Width;
+            auto margin = element.Margin();
+            required += width + margin.Left + margin.Right;
+            ++visibleCount;
+        }
+        if (visibleCount > 1) {
+            required += buttons.Spacing() * (visibleCount - 1);
+        }
+        double available = std::max(0.0, container.ActualWidth() -
+                                             reservedWidth);
+        buttons.Orientation(required > available + 0.5
+                                ? muxc::Orientation::Vertical
+                                : muxc::Orientation::Horizontal);
+        buttons.HorizontalAlignment(HorizontalAlignment::Left);
+    };
+
+    double primaryReserved = 0;
+    if (auto deleteButton = state->singleDeleteButton.get();
+        deleteButton && deleteButton.Visibility() == Visibility::Visible) {
+        primaryReserved = deleteButton.ActualWidth() +
+                          deleteButton.Margin().Left + 6;
+    }
+    fit(state->primaryActionButtons.get(),
+        state->primaryActionContainer.get(), primaryReserved);
+
+    double multiReserved = 0;
+    if (auto container = state->multiActionRow.get()) {
+        // The compact Delete button occupies the grid's right column.
+        multiReserved = 44;
+        fit(state->multiPrimaryActionButtons.get(), container, multiReserved);
+    }
+    fit(state->transferActionButtons.get(), state->transferRow.get(), 0);
 }
 
 bool BetterPanelContainsTitleText(DependencyObject const& root,
@@ -9547,6 +10627,17 @@ void BetterPanelEnsureShareActions(
     auto primaryActions = BetterPanelMakeRow();
     primaryActions.HorizontalAlignment(HorizontalAlignment::Left);
     row.Children().Append(primaryActions);
+    state->primaryActionContainer =
+        winrt::make_weak(row.as<FrameworkElement>());
+    state->primaryActionButtons = winrt::make_weak(primaryActions);
+    auto weakState = std::weak_ptr<BetterPanelState>(state);
+    row.SizeChanged(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    SizeChangedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelUpdateActionWrapping(state);
+            }
+        });
 
     auto actionIconBrush =
         winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(
@@ -9733,6 +10824,59 @@ void BetterPanelEnsureShareActions(
         });
     row.Children().Append(singleDeleteButton);
 
+    auto singleInstallButton =
+        BetterPanelMakeIconButton(L"Install", L"\uE896");
+    applyNativeButtonVisual(singleInstallButton);
+    singleInstallButton.Height(shareHeight);
+    singleInstallButton.Visibility(Visibility::Collapsed);
+    state->singleInstallButton = winrt::make_weak(singleInstallButton);
+    singleInstallButton.Click(
+        [weakStatus](winrt::Windows::Foundation::IInspectable const&,
+                     RoutedEventArgs const&) {
+            auto paths = BetterPanelGetActiveSelectionPaths(false);
+            if (!BetterPanelCanInstallSelection(paths)) {
+                BetterPanelSetStatus(weakStatus,
+                                     L"Install isn't available for this selection");
+                return;
+            }
+            PCWSTR verb = BetterPanelIsRegistryFile(paths.front())
+                              ? L"merge"
+                              : L"install";
+            HRESULT result = BetterPanelInvokeSelectedContextMenuVerb(verb);
+            BetterPanelSetStatus(
+                weakStatus,
+                SUCCEEDED(result) ? L""
+                                  : L"Windows couldn't start the installer");
+        });
+    primaryActions.Children().Append(singleInstallButton);
+
+    auto nativeFileActionsButton =
+        BetterPanelMakeIconButton(L"File actions", L"\uE712");
+    applyNativeButtonVisual(nativeFileActionsButton);
+    nativeFileActionsButton.Height(shareHeight);
+    nativeFileActionsButton.Visibility(Visibility::Collapsed);
+    state->nativeFileActionsButton = winrt::make_weak(nativeFileActionsButton);
+    std::weak_ptr<BetterPanelState> weakActionsState = state;
+    nativeFileActionsButton.Click(
+        [weakActionsState, weakStatus](
+            winrt::Windows::Foundation::IInspectable const&,
+            RoutedEventArgs const&) {
+            auto state = weakActionsState.lock();
+            if (!state || state->selectedPath.empty()) return;
+            HRESULT result = BetterPanelShowTypeSpecificNativeActions(
+                state->selectedPath);
+            if (result == HRESULT_FROM_WIN32(ERROR_NOT_FOUND)) {
+                BetterPanelSetStatus(weakStatus,
+                                     L"No native actions are available");
+            } else if (FAILED(result)) {
+                BetterPanelSetStatus(weakStatus,
+                                     L"File actions are unavailable");
+            } else {
+                BetterPanelSetStatus(weakStatus, L"");
+            }
+        });
+    primaryActions.Children().Append(nativeFileActionsButton);
+
     auto extractButton = BetterPanelMakeIconButton(L"Extract", L"\uE8B7");
     extractButton.Height(shareHeight);
     extractButton.Visibility(Visibility::Collapsed);
@@ -9824,6 +10968,9 @@ void BetterPanelEndRename(std::shared_ptr<BetterPanelState> const& state,
             }
             SHChangeNotify(SHCNE_RENAMEITEM, SHCNF_PATHW, oldPath.c_str(),
                            newPath.c_str());
+            state->pendingRenameOldPath = oldPath;
+            state->pendingRenameNewPath = newPath;
+            state->pendingRenameTick = GetTickCount64();
             state->selectedPath = newPath;
             if (reloadVideo) {
                 BetterPanelLoadVideo(state, newPath);
@@ -9842,8 +10989,26 @@ void BetterPanelEndRename(std::shared_ptr<BetterPanelState> const& state,
     pencil.Visibility(Visibility::Visible);
 }
 
+void BetterPanelCloseRenameEditor(
+    std::shared_ptr<BetterPanelState> const& state) {
+    if (!state) return;
+    if (auto edit = state->fileRenameBox.get()) {
+        edit.Visibility(Visibility::Collapsed);
+    }
+    if (auto title = state->fileTitle.get()) {
+        title.Visibility(Visibility::Visible);
+    }
+    if (auto edit = state->audioRenameBox.get()) {
+        edit.Visibility(Visibility::Collapsed);
+    }
+    if (auto title = state->audioTitle.get()) {
+        title.Visibility(Visibility::Visible);
+    }
+}
+
 void BetterPanelBeginRename(std::shared_ptr<BetterPanelState> const& state,
                             bool audio) {
+    if (!state || !g_settings.showRename) return;
     auto edit = audio ? state->audioRenameBox.get()
                       : state->fileRenameBox.get();
     auto title = audio ? state->audioTitle.get() : state->fileTitle.get();
@@ -9994,6 +11159,30 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
                                   : BetterPanelGetActiveFolderPath())
                            : state->selectedPath);
     if (path.empty() && !isHome) path = state->selectedPath;
+    if (!state->pendingRenameNewPath.empty()) {
+        bool showingRenamedPath =
+            _wcsicmp(path.c_str(), state->pendingRenameNewPath.c_str()) == 0;
+        bool showingStalePath =
+            _wcsicmp(path.c_str(), state->pendingRenameOldPath.c_str()) == 0;
+        bool renameStillFresh = selectionTick >= state->pendingRenameTick &&
+                                selectionTick - state->pendingRenameTick < 3000;
+        bool renamedFileExists =
+            GetFileAttributesW(state->pendingRenameNewPath.c_str()) !=
+            INVALID_FILE_ATTRIBUTES;
+        if (showingStalePath && renameStillFresh && renamedFileExists) {
+            // Explorer can briefly keep returning the pre-rename selection.
+            // Hold the successful name until its Shell view catches up.
+            path = state->pendingRenameNewPath;
+        } else if (showingRenamedPath || !renameStillFresh ||
+                   !showingStalePath) {
+            state->pendingRenameOldPath.clear();
+            state->pendingRenameNewPath.clear();
+            state->pendingRenameTick = 0;
+        }
+    }
+    if (_wcsicmp(path.c_str(), state->selectedPath.c_str()) != 0) {
+        BetterPanelCloseRenameEditor(state);
+    }
     DWORD pathAttributes =
         path.empty()
             ? INVALID_FILE_ATTRIBUTES
@@ -10107,11 +11296,96 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             (path.empty() || isDirectory) ? Visibility::Collapsed
                                           : Visibility::Visible);
     }
+    bool canInstallSelection =
+        BetterPanelCanInstallSelection(activeSelection);
+    if (auto installButton = state->singleInstallButton.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            installButton,
+            g_settings.showInstallActions && !isMultiSelection &&
+                    canInstallSelection
+                ? Visibility::Visible
+                : Visibility::Collapsed);
+    }
+    if (auto actionsButton = state->nativeFileActionsButton.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            actionsButton,
+            g_settings.showFileActions && !isMultiSelection && !isDirectory &&
+                    !BetterPanelIsImageFile(path) &&
+                    BetterPanelHasTypeSpecificNativeActions(path)
+                ? Visibility::Visible
+                : Visibility::Collapsed);
+    }
+    if (auto installButton = state->multiInstallButton.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            installButton,
+            g_settings.showInstallActions && isMultiSelection &&
+                    canInstallSelection
+                ? Visibility::Visible
+                : Visibility::Collapsed);
+    }
+    if (!g_settings.showRename) {
+        BetterPanelCloseRenameEditor(state);
+    }
     if (auto renameButton = state->fileRenameButton.get()) {
         BetterPanelSetVisibilityIfChanged(
-            renameButton, path.empty() || isDirectory || isMultiSelection
-                              ? Visibility::Collapsed
-                              : Visibility::Visible);
+            renameButton,
+            !path.empty() && !isDirectory && !isMultiSelection
+                ? Visibility::Visible
+                : Visibility::Collapsed);
+        renameButton.IsHitTestVisible(g_settings.showRename);
+        muxa::AutomationProperties::SetName(
+            renameButton, g_settings.showRename ? L"Rename selected file"
+                                                : L"Selected file name");
+        muxc::ToolTipService::SetToolTip(
+            renameButton,
+            winrt::box_value(g_settings.showRename ? L"Click to rename"
+                                                   : L""));
+    }
+    if (auto renameButton = state->multiRenameButton.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            renameButton,
+            g_settings.showRename && isMultiSelection ? Visibility::Visible
+                                                       : Visibility::Collapsed);
+    }
+    if (!g_settings.showPreviewSearch) {
+        state->textSearchActive = false;
+        state->textSearchQuery.clear();
+        state->textSearchMatches.clear();
+        state->textSearchMatchIndex = 0;
+        state->pdfSearchLoading = false;
+        ++state->pdfSearchGeneration;
+        state->pdfSearchPages.clear();
+        state->pdfSearchIndex = 0;
+        BetterPanelUpdateTextControls(state);
+        BetterPanelUpdatePdfSearchControls(state);
+    }
+    if (auto searchRow = state->textSearchRow.get()) {
+        BetterPanelSetVisibilityIfChanged(searchRow, Visibility::Visible);
+    }
+    if (auto searchBox = state->textSearchBox.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            searchBox, g_settings.showPreviewSearch ? Visibility::Visible
+                                                    : Visibility::Collapsed);
+    }
+    if (auto previous = state->textSearchPreviousButton.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            previous, g_settings.showPreviewSearch ? Visibility::Visible
+                                                   : Visibility::Collapsed);
+    }
+    if (auto next = state->textSearchNextButton.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            next, g_settings.showPreviewSearch ? Visibility::Visible
+                                               : Visibility::Collapsed);
+    }
+    if (auto result = state->textSearchResult.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            result, g_settings.showPreviewSearch ? Visibility::Visible
+                                                 : Visibility::Collapsed);
+    }
+    if (auto searchRow = state->pdfSearchRow.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            searchRow, g_settings.showPreviewSearch ? Visibility::Visible
+                                                    : Visibility::Collapsed);
     }
 
     HWND activeTab = BetterPanelGetFocusedTabWindow();
@@ -10335,6 +11609,12 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             homeCard, isHome ? Visibility::Visible : Visibility::Collapsed);
     }
     if (auto driveCard = state->driveCard.get()) {
+        // The compact drive view normally pulls these shortcuts upward. Keep
+        // their natural position while transfer details are present so an
+        // expanded item list can't be covered by the destination-drive grid.
+        driveCard.Margin(isDriveRoot && hasTransferTarget
+                             ? Thickness{0, 0, 0, 0}
+                             : Thickness{0, -32, 0, 0});
         BetterPanelSetVisibilityIfChanged(
             driveCard, isDriveRoot && !isMultiSelection
                            ? Visibility::Visible
@@ -10419,6 +11699,11 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         state->textOriginal.clear();
         state->textEditable = false;
         state->textDirty = false;
+        state->textSearchActive = false;
+        state->textSearchQuery.clear();
+        state->textSearchMatches.clear();
+        state->textSearchMatchIndex = 0;
+        if (auto search = state->textSearchBox.get()) search.Text(L"");
         state->detectedSyntaxLanguage = BetterPanelSyntaxLanguage::PlainText;
         state->insightsLoading = false;
         state->insightsLoadedPath.clear();
@@ -10435,6 +11720,10 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         state->archivePreviewLoading = false;
         state->archivePreviewPath.clear();
         state->pdfLoading = false;
+        state->pdfSearchLoading = false;
+        ++state->pdfSearchGeneration;
+        state->pdfSearchPages.clear();
+        state->pdfSearchIndex = 0;
         state->pdfDocument = nullptr;
         state->pdfLoadedPath.clear();
         state->pdfPageIndex = 0;
@@ -10447,7 +11736,10 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             pdfInfo.Visibility(isPdf ? Visibility::Visible
                                      : Visibility::Collapsed);
         }
+        if (auto search = state->pdfSearchBox.get()) search.Text(L"");
+        if (auto result = state->pdfSearchResult.get()) result.Text(L"");
         BetterPanelUpdatePdfControls(state);
+        BetterPanelUpdatePdfSearchControls(state);
         state->animatedGif = nullptr;
         state->gifExpanded = false;
         if (auto gifCard = state->gifCard.get()) {
@@ -10530,6 +11822,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         BetterPanelPruneButtonLayoutSnapshots(state);
         BetterPanelApplyNativeButtonStyle(state, panel);
     }
+    BetterPanelUpdateActionWrapping(state);
     BetterPanelRefreshPlaybackState(state);
 }
 
@@ -10684,6 +11977,14 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
 
     auto transferButtons = BetterPanelMakeRow();
     transferButtons.HorizontalAlignment(HorizontalAlignment::Left);
+    state->transferActionButtons = winrt::make_weak(transferButtons);
+    transferRow.SizeChanged(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    SizeChangedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelUpdateActionWrapping(state);
+            }
+        });
 
     auto transferExtractButton =
         BetterPanelMakeIconButton(L"Extract here", L"\uE8B7");
@@ -10847,7 +12148,15 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
 
     auto multiPrimaryButtons = BetterPanelMakeRow();
     multiPrimaryButtons.HorizontalAlignment(HorizontalAlignment::Left);
+    state->multiPrimaryActionButtons = winrt::make_weak(multiPrimaryButtons);
     multiButtons.Children().Append(multiPrimaryButtons);
+    multiActionRow.SizeChanged(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    SizeChangedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelUpdateActionWrapping(state);
+            }
+        });
 
     auto multiMoveButton =
         BetterPanelMakeIconButton(L"Move to...", L"\uE8DE");
@@ -10880,6 +12189,16 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
             if (!queued && state->timer) state->timer.Start();
         });
     multiPrimaryButtons.Children().Append(multiMoveButton);
+
+    auto multiRenameButton =
+        BetterPanelMakeIconButton(L"Bulk rename", L"\uE8AC");
+    state->multiRenameButton = winrt::make_weak(multiRenameButton);
+    multiRenameButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            BetterPanelShowBulkRenameDialog(weakState);
+        });
+    multiPrimaryButtons.Children().Append(multiRenameButton);
 
     auto multiDeleteButton = BetterPanelMakeButton(L"");
     muxc::FontIcon multiDeleteIcon;
@@ -10920,6 +12239,28 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
             if (!queued && state->timer) state->timer.Start();
         });
     multiButtons.Children().Append(multiDeleteButton);
+
+    auto multiInstallButton =
+        BetterPanelMakeIconButton(L"Install", L"\uE896");
+    multiInstallButton.Visibility(Visibility::Collapsed);
+    state->multiInstallButton = winrt::make_weak(multiInstallButton);
+    multiInstallButton.Click(
+        [weakStatus](winrt::Windows::Foundation::IInspectable const&,
+                     RoutedEventArgs const&) {
+            auto paths = BetterPanelGetActiveSelectionPaths(false);
+            if (!BetterPanelCanInstallSelection(paths)) {
+                BetterPanelSetStatus(weakStatus,
+                                     L"Install isn't available for this selection");
+                return;
+            }
+            HRESULT result =
+                BetterPanelInvokeSelectedContextMenuVerb(L"install");
+            BetterPanelSetStatus(
+                weakStatus,
+                SUCCEEDED(result) ? L""
+                                  : L"Windows couldn't start the installer");
+        });
+    multiPrimaryButtons.Children().Append(multiInstallButton);
 
     auto multiArchiveButton =
         BetterPanelMakeIconButton(L"Archive", L"\uE7B8");
@@ -11128,6 +12469,22 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
         state->previewExpandButton = winrt::make_weak(expandButton);
         std::weak_ptr<BetterPanelState> weakPreviewState = state;
         auto weakExpandIcon = winrt::make_weak(expandIcon);
+        thumbnail.RightTapped(
+            [weakPreviewState, weakStatus](
+                winrt::Windows::Foundation::IInspectable const&,
+                winrt::Microsoft::UI::Xaml::Input::RightTappedRoutedEventArgs const&
+                    args) {
+                auto state = weakPreviewState.lock();
+                if (!state || !g_settings.showFileActions ||
+                    !BetterPanelIsImageFile(state->selectedPath)) {
+                    return;
+                }
+                args.Handled(true);
+                auto anchor = state->nativePreview.get();
+                if (!anchor) return;
+                BetterPanelShowImageActionsFlyout(
+                    state, anchor, args.GetPosition(anchor), weakStatus);
+            });
         expandButton.Click(
             [weakPreviewState, weakExpandIcon, weakStatus](
                 winrt::Windows::Foundation::IInspectable const&,
@@ -11280,8 +12637,13 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     // Keep the decoder's rendering surface stable. The Viewbox below scales
     // this surface through XAML composition without forcing the active decoder
     // to recreate it for every pixel of a Details-pane resize.
-    videoPlayer.Width(720);
-    videoPlayer.Height(346);
+    // Keep the transport controls at a compact native size before the Viewbox
+    // scales them. A 720 px surface made the controls unreadably small in a
+    // narrow Details pane.
+    constexpr double videoSurfaceWidth = 420.0;
+    constexpr double videoSurfaceHeight = 236.0;
+    videoPlayer.Width(videoSurfaceWidth);
+    videoPlayer.Height(videoSurfaceHeight);
     videoPlayer.HorizontalAlignment(HorizontalAlignment::Center);
     auto videoControls = videoPlayer.TransportControls();
     videoControls.IsCompact(true);
@@ -11289,8 +12651,8 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     state->videoPlayer = winrt::make_weak(videoPlayer);
 
     muxc::Viewbox videoViewport;
-    videoViewport.Width(420);
-    videoViewport.Height(202);
+    videoViewport.Width(videoSurfaceWidth);
+    videoViewport.Height(videoSurfaceHeight);
     videoViewport.HorizontalAlignment(HorizontalAlignment::Center);
     videoViewport.Stretch(
         winrt::Microsoft::UI::Xaml::Media::Stretch::Fill);
@@ -11340,12 +12702,16 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
                     SizeChangedEventArgs const& args) {
             if (auto state = weakState.lock()) {
                 if (auto viewport = state->videoViewport.get()) {
-                    double availableWidth =
-                        std::max(120.0, static_cast<double>(args.NewSize().Width));
-                    double viewportWidth = std::min(availableWidth, 960.0);
+                    // The panel has 16 px margins on both sides. Subtract them
+                    // so the video and its controls never extend under the
+                    // pane edge or scrollbar.
+                    double availableWidth = std::max(
+                        180.0,
+                        static_cast<double>(args.NewSize().Width) - 32.0);
+                    double viewportWidth = std::min(availableWidth, 560.0);
                     viewport.Width(viewportWidth);
-                    viewport.Height(
-                        std::clamp(viewportWidth * 0.48, 190.0, 460.0));
+                    viewport.Height(std::clamp(
+                        viewportWidth * (236.0 / 420.0), 150.0, 315.0));
                 }
                 state->gifNormalHeight =
                     std::clamp(static_cast<double>(args.NewSize().Width) * 0.62,
@@ -11805,7 +13171,6 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
                 BetterPanelUpdateTextControls(state);
             }
         });
-    textHeadingRow.Children().Append(syntaxLanguagePicker);
     textContent.Children().Append(textHeadingRow);
 
     muxc::TextBlock textInfo;
@@ -11814,6 +13179,130 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     textInfo.TextWrapping(TextWrapping::Wrap);
     state->textInfo = winrt::make_weak(textInfo);
     textContent.Children().Append(textInfo);
+
+    muxc::Grid textSearchRow;
+    textSearchRow.ColumnSpacing(5);
+    state->textSearchRow =
+        winrt::make_weak(textSearchRow.as<FrameworkElement>());
+    muxc::ColumnDefinition textSearchFieldColumn;
+    textSearchFieldColumn.Width(GridLength{1, GridUnitType::Star});
+    textSearchRow.ColumnDefinitions().Append(textSearchFieldColumn);
+    for (int index = 0; index < 4; ++index) {
+        muxc::ColumnDefinition column;
+        column.Width(GridLength{1, GridUnitType::Auto});
+        textSearchRow.ColumnDefinitions().Append(column);
+    }
+
+    muxc::TextBox textSearchBox;
+    textSearchBox.PlaceholderText(L"Search preview");
+    textSearchBox.Height(32);
+    textSearchBox.MinHeight(32);
+    textSearchBox.HorizontalAlignment(HorizontalAlignment::Stretch);
+    state->textSearchBox = winrt::make_weak(textSearchBox);
+    textSearchBox.GotFocus(
+        [weakState](winrt::Windows::Foundation::IInspectable const& sender,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            auto editor = sender.try_as<muxc::TextBox>();
+            if (state && editor) {
+                state->transientFocusedEditor = winrt::make_weak(editor);
+            }
+        });
+    textSearchBox.LostFocus(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                state->transientFocusedEditor = {};
+            }
+        });
+    textSearchBox.TextChanged(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    muxc::TextChangedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                state->textSearchActive = false;
+                state->textSearchQuery.clear();
+                state->textSearchMatches.clear();
+                state->textSearchMatchIndex = 0;
+                if (auto result = state->textSearchResult.get()) {
+                    result.Text(L"");
+                }
+                if (auto button = state->textSearchPreviousButton.get()) {
+                    button.IsEnabled(false);
+                }
+                if (auto button = state->textSearchNextButton.get()) {
+                    button.IsEnabled(false);
+                }
+                BetterPanelUpdateTextControls(state);
+            }
+        });
+    textSearchBox.KeyDown(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&
+                        args) {
+            if (args.Key() != winrt::Windows::System::VirtualKey::Enter) return;
+            args.Handled(true);
+            if (auto state = weakState.lock()) {
+                BetterPanelUpdateTextSearch(
+                    state, (GetKeyState(VK_SHIFT) & 0x8000) ? -1 : 1, false);
+            }
+        });
+    textSearchRow.Children().Append(textSearchBox);
+
+    muxc::Grid::SetColumn(syntaxLanguagePicker, 1);
+    textSearchRow.Children().Append(syntaxLanguagePicker);
+
+    auto textSearchPrevious = BetterPanelMakeButton(L"");
+    muxc::FontIcon textSearchPreviousIcon;
+    textSearchPreviousIcon.Glyph(L"\uE70E");
+    textSearchPrevious.Content(textSearchPreviousIcon);
+    textSearchPrevious.Width(32);
+    textSearchPrevious.Height(32);
+    textSearchPrevious.Padding(Thickness{0});
+    textSearchPrevious.IsEnabled(false);
+    muxc::Grid::SetColumn(textSearchPrevious, 2);
+    muxa::AutomationProperties::SetName(textSearchPrevious,
+                                        L"Previous search result");
+    state->textSearchPreviousButton = winrt::make_weak(textSearchPrevious);
+    textSearchPrevious.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelUpdateTextSearch(state, -1, false);
+            }
+        });
+    textSearchRow.Children().Append(textSearchPrevious);
+
+    auto textSearchNext = BetterPanelMakeButton(L"");
+    muxc::FontIcon textSearchNextIcon;
+    textSearchNextIcon.Glyph(L"\uE70D");
+    textSearchNext.Content(textSearchNextIcon);
+    textSearchNext.Width(32);
+    textSearchNext.Height(32);
+    textSearchNext.Padding(Thickness{0});
+    textSearchNext.IsEnabled(false);
+    muxc::Grid::SetColumn(textSearchNext, 3);
+    muxa::AutomationProperties::SetName(textSearchNext,
+                                        L"Next search result");
+    state->textSearchNextButton = winrt::make_weak(textSearchNext);
+    textSearchNext.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                BetterPanelUpdateTextSearch(state, 1, false);
+            }
+        });
+    textSearchRow.Children().Append(textSearchNext);
+
+    muxc::TextBlock textSearchResult;
+    textSearchResult.MinWidth(54);
+    textSearchResult.FontSize(11);
+    textSearchResult.Opacity(0.72);
+    textSearchResult.VerticalAlignment(VerticalAlignment::Center);
+    textSearchResult.TextAlignment(TextAlignment::Right);
+    muxc::Grid::SetColumn(textSearchResult, 4);
+    state->textSearchResult = winrt::make_weak(textSearchResult);
+    textSearchRow.Children().Append(textSearchResult);
+    textContent.Children().Append(textSearchRow);
 
     muxc::TextBox textEditor;
     textEditor.AcceptsReturn(true);
@@ -11849,6 +13338,9 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
             }
             state->textDirty = editor.Text() != state->textOriginal;
             BetterPanelUpdateTextControls(state);
+            if (state->textSearchActive) {
+                BetterPanelUpdateTextSearch(state, 0, true);
+            }
         });
     muxc::Border syntaxPreviewSurface;
     syntaxPreviewSurface.MinHeight(220);
@@ -12033,6 +13525,105 @@ void BetterPanelInstallDetailPanel(FrameworkElement element) {
     pdfInfo.TextWrapping(TextWrapping::Wrap);
     state->pdfInfo = winrt::make_weak(pdfInfo);
     pdfContent.Children().Append(pdfInfo);
+
+    muxc::Grid pdfSearchRow;
+    pdfSearchRow.ColumnSpacing(4);
+    state->pdfSearchRow =
+        winrt::make_weak(pdfSearchRow.as<FrameworkElement>());
+    muxc::ColumnDefinition pdfSearchFieldColumn;
+    pdfSearchFieldColumn.Width(GridLength{1, GridUnitType::Star});
+    pdfSearchRow.ColumnDefinitions().Append(pdfSearchFieldColumn);
+    for (int i = 0; i < 3; ++i) {
+        muxc::ColumnDefinition buttonColumn;
+        buttonColumn.Width(GridLength{1, GridUnitType::Auto});
+        pdfSearchRow.ColumnDefinitions().Append(buttonColumn);
+    }
+    muxc::ColumnDefinition pdfSearchResultColumn;
+    pdfSearchResultColumn.Width(GridLength{64, GridUnitType::Pixel});
+    pdfSearchRow.ColumnDefinitions().Append(pdfSearchResultColumn);
+
+    muxc::TextBox pdfSearchBox;
+    pdfSearchBox.PlaceholderText(L"Search PDF");
+    pdfSearchBox.Height(32);
+    pdfSearchBox.MinHeight(32);
+    state->pdfSearchBox = winrt::make_weak(pdfSearchBox);
+    pdfSearchBox.GotFocus(
+        [weakState](winrt::Windows::Foundation::IInspectable const& sender,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            auto editor = sender.try_as<muxc::TextBox>();
+            if (state && editor) {
+                state->transientFocusedEditor = winrt::make_weak(editor);
+            }
+        });
+    pdfSearchBox.LostFocus(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock()) {
+                state->transientFocusedEditor = {};
+            }
+        });
+    pdfSearchRow.Children().Append(pdfSearchBox);
+
+    auto pdfSearchButton = BetterPanelMakeIconButton(L"Search PDF", L"\uE721");
+    pdfSearchButton.IsEnabled(false);
+    state->pdfSearchButton = winrt::make_weak(pdfSearchButton);
+    muxc::Grid::SetColumn(pdfSearchButton, 1);
+    pdfSearchRow.Children().Append(pdfSearchButton);
+
+    auto pdfSearchPrevious =
+        BetterPanelMakeIconButton(L"Previous match", L"\uE70E");
+    pdfSearchPrevious.IsEnabled(false);
+    state->pdfSearchPreviousButton = winrt::make_weak(pdfSearchPrevious);
+    muxc::Grid::SetColumn(pdfSearchPrevious, 2);
+    pdfSearchRow.Children().Append(pdfSearchPrevious);
+
+    auto pdfSearchNext = BetterPanelMakeIconButton(L"Next match", L"\uE70D");
+    pdfSearchNext.IsEnabled(false);
+    state->pdfSearchNextButton = winrt::make_weak(pdfSearchNext);
+    muxc::Grid::SetColumn(pdfSearchNext, 3);
+    pdfSearchRow.Children().Append(pdfSearchNext);
+
+    muxc::TextBlock pdfSearchResult;
+    pdfSearchResult.FontSize(11);
+    pdfSearchResult.Opacity(0.72);
+    pdfSearchResult.TextAlignment(TextAlignment::Right);
+    pdfSearchResult.VerticalAlignment(VerticalAlignment::Center);
+    state->pdfSearchResult = winrt::make_weak(pdfSearchResult);
+    muxc::Grid::SetColumn(pdfSearchResult, 4);
+    pdfSearchRow.Children().Append(pdfSearchResult);
+
+    auto runPdfSearch = [weakState]() {
+        auto state = weakState.lock();
+        auto search = state ? state->pdfSearchBox.get() : nullptr;
+        if (!state || !search || !state->pdfDocument) return;
+        BetterPanelSearchPdf(weakState, state->selectedPath,
+                             std::wstring(search.Text().c_str()));
+    };
+    pdfSearchButton.Click(
+        [runPdfSearch](winrt::Windows::Foundation::IInspectable const&,
+                       RoutedEventArgs const&) { runPdfSearch(); });
+    pdfSearchBox.KeyDown(
+        [runPdfSearch](winrt::Windows::Foundation::IInspectable const&,
+                       winrt::Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& args) {
+            if (args.Key() == winrt::Windows::System::VirtualKey::Enter) {
+                args.Handled(true);
+                runPdfSearch();
+            }
+        });
+    pdfSearchPrevious.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (state) BetterPanelShowPdfSearchMatch(state, weakState, -1);
+        });
+    pdfSearchNext.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            auto state = weakState.lock();
+            if (state) BetterPanelShowPdfSearchMatch(state, weakState, 1);
+        });
+    pdfContent.Children().Append(pdfSearchRow);
 
     muxc::Border pdfPageSurface;
     pdfPageSurface.Height(460);
@@ -18346,6 +19937,7 @@ void BetterPanelApplyButtonSettingsForCurrentThread() {
             if (auto expand = state->multiPreviewExpandButton.get()) {
                 BetterPanelApplyNativeButtonStyle(state, expand);
             }
+            BetterPanelRefresh(state);
         } catch (winrt::hresult_error const& ex) {
             Wh_Log(L"Live button settings error %08X: %s", ex.code(),
                    ex.message().c_str());
@@ -19203,6 +20795,15 @@ void LoadSettings() {
         g_settings.clickAnimation = BetterPanelClickAnimation::Wobble;
     }
     Wh_FreeStringSetting(clickAnimation);
+
+    g_settings.showRename =
+        Wh_GetIntSetting(L"featureVisibility.rename") != 0;
+    g_settings.showPreviewSearch =
+        Wh_GetIntSetting(L"featureVisibility.previewSearch") != 0;
+    g_settings.showInstallActions =
+        Wh_GetIntSetting(L"featureVisibility.installActions") != 0;
+    g_settings.showFileActions =
+        Wh_GetIntSetting(L"featureVisibility.fileActions") != 0;
     return;
 
 #if 0

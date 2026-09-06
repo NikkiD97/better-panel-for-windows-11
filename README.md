@@ -50,6 +50,7 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 - Earliest and latest modified dates.
 - Overlapping Windows Shell icons representing the selected item types.
 - Native **Move to**, recycle-aware **Delete**, and **Archive** actions for multiple selections.
+- Bulk rename with prefix, suffix, numbering, find and replace, and a preview before applying.
 - Multiple-selection actions stay near the top of the panel for quicker access.
 
 ### Images and GIFs
@@ -58,6 +59,7 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 - Animated GIF playback.
 - Image dimensions and supported EXIF information.
 - Camera details, date taken, rating, and GPS coordinates when available.
+- Right-click image previews to rotate an image or set it as the desktop background.
 
 ### PDF previews and printing
 
@@ -65,6 +67,7 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 - Page navigation and page counts.
 - Smooth scrolling.
 - Sharp re-rendered zoom from 50% to 250%.
+- Search for text across PDF pages.
 - Printing for PDFs, text, images, and other supported file types.
 
 ### Text and code files
@@ -72,6 +75,7 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 - Preview and edit TXT, Markdown, JSON, XML, YAML, INI, LOG, CSV, scripts, configuration files, and common source-code formats.
 - Syntax highlighting for keywords, strings, comments, numbers, and types.
 - Automatic language detection with a manual language selector for Markdown, C/C++, C#, JavaScript, TypeScript, JSON, Python, PowerShell, HTML/XML, CSS, YAML, INI/config, Batch, and SQL.
+- Search inside text, code, INF, and LOG previews with highlighted matches.
 - **Edit**, **Save**, **Cancel**, and **Reload** controls.
 - Saved text-preview size menu.
 - Encoding and line-ending preservation.
@@ -114,11 +118,20 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 - Copy individual values for name, full path, size, modified date, and SHA-256.
 - Copy all core file details with one button.
 
+### Type-specific actions
+
+- Install TTF, OTF, TTC, and FON fonts.
+- Install INF files and merge REG files.
+- Mount ISO and VHD images.
+- Install supported certificate files.
+
 ### Appearance and controls
 
 - Compact, Comfort, and Custom button layouts.
 - Adjustable button margins, padding, minimum dimensions, and icon-button size.
 - Optional hover and click animations.
+- Settings to hide Rename, preview search, Install, and File actions.
+- Action buttons move onto new lines in narrow Details panes.
 - Live settings updates without restarting Explorer.
 - Circular loading indicator when the panel takes longer to open.
 

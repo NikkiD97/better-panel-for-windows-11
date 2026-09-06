@@ -1,5 +1,34 @@
 # Changelog
 
+## 2.2.1
+
+### Added
+
+- Added bulk rename with prefix, suffix, find and replace, numbering, and a preview before applying.
+- Added search inside text, code, INF, LOG, and PDF previews.
+- Added highlighted text matches and matching-page controls for PDFs.
+- Added Install actions for TTF, OTF, TTC, FON, INF, and REG files.
+- Added File actions for mounting ISO/VHD files and installing certificates.
+- Added a right-click image-preview menu for rotating images and setting wallpaper.
+- Added text preview and editing for INF files.
+- Added settings to hide Rename, preview search, Install, and File actions.
+
+### Changed
+
+- Narrow action rows now move buttons onto new lines instead of cutting them off.
+- Hiding Rename keeps the file name visible but read-only.
+- Hiding preview search keeps the language selector visible.
+- Moved Feature visibility below the animation settings.
+- Video controls stay readable and inside narrow Details panes.
+
+### Bug
+
+- Photo rotation doesn't auto reload
+### Fixed
+
+- File renames now update immediately and the rename box closes when changing folders.
+- Fixed the cross-tab Move item list clipping on drive destinations.
+
 ## 2.2
 
 ### Added
