@@ -1,5 +1,52 @@
 # Changelog
 
+## 2.2.2
+
+### Added
+
+- Added an experimental pop-out window for Better Panel, with Home and pin/unpin
+  controls. Its switch is under Feature visibility and is off by default.
+- Added a circular loading placeholder while the panel starts and a thin blue
+  progress line beneath the Details header while file information loads.
+
+### Changed
+
+- Reworked the video preview's width and height, with a full-width, 40-pixel
+  playback strip below the picture.
+- Moved the "Select a box to copy" hint below the Details header and removed
+  the visible "Reading file details" message.
+- Reduced spacing around the preview and action controls.
+
+### Known issues
+
+- Enabling the mod while an Explorer window is already open may leave that
+  window's native Details pane in place until the window is reopened.
+- The pop-out window is experimental and can still fall out of sync with the
+  active Explorer tab or selection.
+- In text editing mode, starting a new mouse selection can leave parts of the
+  previous RichEdit selection highlighted. Preview-mode selection and clicking
+  outside the editor clear normally.
+
+### Fixed
+
+- Removed unreachable legacy compatibility, settings, and telemetry code.
+- Added cancellation and bounded shutdown handling for background preview,
+  analysis, Home, and save work; cleaned up panel timers and callbacks on their
+  owning UI threads when disabling the mod.
+- Moved Home drive and Recent/Favorites gathering off Explorer's UI thread.
+- Made text saves atomic to protect the original file if a write fails.
+- Restricted archive-lister handle inheritance to its standard streams.
+- Used the owning Explorer window for menus, dialogs, and file actions.
+- Removed synthetic selection clicks from middle-click folder opening and
+  improved Extract and native Details matching on localized systems.
+- Limited Backspace handling to the panel's focused text editor.
+- Moved suspend/resume recovery to an Explorer window callback.
+- Reduced repeated whole-window scans when suppressing Explorer's native
+  Details section.
+- Removed cross-tab Move actions from Home and other virtual shell locations
+  that cannot be used as filesystem destinations.
+- Fixed an Explorer crash when advancing or reversing through audio files.
+
 ## 2.2.1
 
 ### Added
@@ -83,9 +130,8 @@
 ## 2.1.2-beta.2
 
 > **Beta:** This update expands the diagnostics-free Beta 1 build with native
-> Favorites integration and a redesigned Home experience. Compatibility with
-> Windows 11 File Explorer Styler remains confirmed on the tested Windows 11
-> 25H2 system; broader Windows-build testing is still needed.
+> Favorites integration and a redesigned Home experience. Broader Windows-build
+> and Explorer-mod combination testing is still needed.
 
 ### Added
 
@@ -134,8 +180,8 @@ the problem remains, or wait until Windhawk refreshes its cache.
   pane.
 - Added direct association between each Better Panel instance and its owning
   Explorer window and active tab.
-- Added compatibility with Windows 11 File Explorer Styler on the tested
-  Windows 11 25H2 system.
+- Improved compatibility with other Explorer mods by avoiding the process-wide
+  XAML Diagnostics connection.
 
 ### Changed
 

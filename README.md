@@ -18,10 +18,11 @@ Better Panel for Windows 11 is a Windhawk mod that turns File Explorer’s basic
 > [!WARNING]
 > Better Panel uses private Explorer WinUI elements. Windows updates may change these elements and require an update to the mod, even on an otherwise supported Windows version.
 
-### File Explorer Styler compatibility
+### Compatibility with other Explorer mods
 
-Better Panel does not occupy Explorer's XAML Diagnostics connection. It can run
-beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
+Better Panel uses its own Explorer lifecycle and selection hooks and does not
+occupy Explorer's XAML Diagnostics connection. Other Explorer-mod combinations
+have not all been tested.
 
 ## Features
 
@@ -29,6 +30,9 @@ beside Windows 11 File Explorer Styler on the tested Windows 11 25H2 system.
 
 - Middle-click folders to open them in a new Explorer tab.
 - Custom Home panel with drives, capacity bars, available space, and saved **Recent** and **Favorites** views.
+- Experimental detachable Details pane with Home and pin controls, hosted in
+  its own resizable window. It is off by default; see the 2.2.2 known issues in
+  the changelog.
 - Navigate between available drives directly from the Details pane.
 - Native-looking **Share**, **Open**, and **Open with** buttons.
 - File-type icons, a cleaner title row, and click-to-edit inline renaming.
@@ -186,7 +190,7 @@ Open a GitHub issue and include:
 
 Copyright © 2026 Nicole S.
 
-Better Panel is its own separate mod. It does not contain, fork, or replace
-Windows 11 File Explorer Styler and is not a theme or styling mod.
+Better Panel is an independently developed, function-focused mod. It is not a
+theme or styling mod and does not depend on one.
 
 Distributed under the [GNU General Public License v3.0 or later](LICENSE).
