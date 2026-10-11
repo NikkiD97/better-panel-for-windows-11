@@ -1,5 +1,73 @@
 # Changelog
 
+## 2.2.4
+
+### Performance
+
+- Panel refreshes no longer restyle every button and rebuild hover animations
+  each time; this now only happens after a setting changes.
+- Hiding Explorer's own Details section and "Select a single file" notice now
+  searches only the Details pane, and skips the search while the hidden element
+  is still in place.
+- Each refresh looks up the active Explorer tab once, and checks whether the
+  selected item can be deleted once per item.
+- The background refresh pauses for minimized or hidden Explorer windows.
+- Middle-clicks reuse one accessibility client per Explorer window instead of
+  creating a new one on every click.
+- Changing settings no longer refreshes each Explorer window twice.
+
+### Fixed
+
+- The panel now appears in the first Explorer window opened after the mod
+  starts, instead of only from the second window.
+- This PC now shows the same drives and Recent/Favorites dashboard as Home,
+  instead of an empty panel with a stuck loading ring.
+- Middle-clicking a folder now only opens it in a new tab, without also
+  selecting it and loading its preview.
+- Renaming from the panel title can be undone with Ctrl+Z, shows the standard
+  Windows conflict and permission prompts, and rejects names ending in a dot or
+  space.
+- Missing button-size settings now fall back to their documented defaults.
+
+### Removed
+
+- Unused code, including the unfinished audio-title rename.
+
+## 2.2.3
+
+### Added
+
+- Added experimental Light and Dark Detail Panel appearances for Windows XP,
+  Vista, Windows 7, Windows 8.1, Ubuntu Ambiance, Snow Leopard Aqua, and modern
+  macOS, alongside Windows 10, OLED, and Slate choices. Appearance changes stay
+  inside Better Panel.
+- Added an optional in-panel Source/Preview switch for Markdown, HTML, XML, and
+  SVG using registered Windows preview handlers. SVG renders as an image;
+  XML's registered PowerToys handler displays highlighted source.
+- Added a configurable Explorer-only shortcut to toggle the Details pane. It is
+  disabled until a key combination is entered in settings.
+
+### Changed
+
+- The experimental document-preview setting now controls the PDF viewer as
+  well as the four handler-based formats. It is off by default; ordinary text
+  source viewing and editing remain available when it is off.
+- Removed the separate Open in Peek button and its setting.
+- Gave drive icons and capacity bars distinct styles for the experimental
+  appearances while preserving blue/theme color, amber, and red fill states.
+
+### Fixed
+
+- Fixed an Explorer crash when opening an in-panel preview on WinUI hosts
+  without the newer ContentIsland interface.
+- Improved icon-only button contrast on light appearances.
+
+### Preview notes
+
+- Some handler-based formats require PowerToys File Explorer add-ons or another
+  registered preview handler. HTML may also show highlighted source depending
+  on the installed handler. Office document previews are not included.
+
 ## 2.2.2
 
 ### Added
