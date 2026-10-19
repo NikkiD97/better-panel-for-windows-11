@@ -30,9 +30,12 @@ have not all been tested.
 
 - Middle-click folders to open them in a new Explorer tab.
 - Custom Home panel with drives, capacity bars, available space, and saved **Recent** and **Favorites** views.
-- Experimental detachable Details pane with Home and pin controls, hosted in
-  its own resizable window. It is off by default; see the 2.2.2 known issues in
-  the changelog.
+- Experimental pop-out window (off by default): attach it to either side of
+  Explorer, dock it to a screen edge or corner, or let it float. It can link to
+  any Explorer window, stay on top, minimize to a floating button with Quick
+  Peek drop targets, and reopen as you left it.
+- Workspace in the pop-out: up to four panels side by side, stacked or in a
+  grid, each following Explorer or locked, with drag and drop into each box.
 - Navigate between available drives directly from the Details pane.
 - Native-looking **Share**, **Open**, and **Open with** buttons.
 - File-type icons, a cleaner title row, and click-to-edit inline renaming.

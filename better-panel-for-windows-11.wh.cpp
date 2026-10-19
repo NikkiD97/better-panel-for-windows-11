@@ -2,12 +2,12 @@
 // @id              better-panel-for-windows-11
 // @name            Better Panel for Windows 11
 // @description     Upgrades the Windows 11 Explorer details pane with previews, media playback, archive tools, file actions, and cross-tab transfers
-// @version         2.2.4
+// @version         2.3.0
 // @author          Nicole S
 // @github          https://github.com/NikkiD97
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -lbcrypt -lwindowscodecs -luuid -ladvapi32 -lgdi32
+// @compilerOptions -lcomctl32 -lole32 -loleaut32 -lruntimeobject -lshell32 -lshlwapi -lbcrypt -lwindowscodecs -luuid -ladvapi32 -lgdi32 -ldwmapi
 // @license         GPL-3.0-or-later
 // ==/WindhawkMod==
 
@@ -128,6 +128,13 @@
     - oled-dark: OLED — Dark
     - slate-light: Slate — Light
     - slate-dark: Slate — Dark
+  - material: theme
+    $name: Panel material
+    $description: "Default: Theme background. See-through lets the Explorer window's own material (Mica, Acrylic or Blur, for example from the macOS Finder mod or File Explorer Styler) show behind the panel. Tinted glass adds a light wash of the theme color on top."
+    $options:
+    - theme: Theme background
+    - transparent: See-through
+    - tinted: Tinted glass
   - buttonShape: theme
     $name: Button shape
     $description: "Default: Match theme. Override the corner style of Better Panel buttons."
@@ -139,6 +146,39 @@
     - pill: Pill
   $name: Appearance (Experimental)
   $description: Choose a complete Detail Panel treatment. Dark choices reinterpret each system's visual language rather than applying a universal dark palette. Windows 11 appearance is the default.
+- window:
+  - makeRoom: true
+    $name: Shrink Explorer to make room
+    $description: When the pop-out is attached to Explorer's side and there isn't room beside it, Explorer shrinks on that side instead of going behind the panel. A maximized Explorer stays maximized beside the panel. Explorer gets its space back when the pop-out is detached, docked to the screen or closed. Only applies to the two attached positions.
+  - matchHeight: true
+    $name: Match Explorer's height
+    $description: An attached pop-out takes Explorer's height; one docked to the left or right edge takes the screen's height, and one docked to the top or bottom edge takes the screen's width. Off keeps the size you give it. Corners always keep your size.
+  - alwaysOnTop: false
+    $name: Always on top
+    $description: Start the pop-out above other windows. Toggle it any time from the window's title-bar menu (right-click the title).
+  - minimizeWithExplorer: true
+    $name: Minimize with Explorer
+    $description: Hide the pop-out while its Explorer window is minimized and bring it back with it. Off keeps the pop-out visible on its own.
+  - startInWorkspace: false
+    $name: Open in Workspace
+    $description: Open the pop-out showing the Workspace (up to four Better Panels side by side) instead of the single panel. Switch any time from the window's title-bar menu or the Workspace toolbar.
+  - detachOnDrag: true
+    $name: Drag to detach
+    $description: Dragging an attached or docked pop-out away from its place makes it free floating. Off snaps it back.
+  - snapDistance: 24
+    $name: Snap distance
+    $description: "Default: 24. How close, in pixels, the pop-out must be dropped to an Explorer edge, screen edge or screen corner to attach or dock there. 0 turns drag snapping off."
+  - snapGap: 0
+    $name: Screen edge spacing
+    $description: "Default: 0. Space, in pixels, left between the pop-out and the screen edge when it is docked to an edge or corner. Attached to Explorer it always sits flush."
+  $name: Pop-out window
+  $description: How the pop-out Better Panel window attaches, docks and floats. Needs "Pop-out window (Experimental)" under Feature visibility.
+- compatibility:
+  - windows12Explorer: true
+    $name: Windows 12 Explorer Concept
+    $description: "Default: on. When the Windows 12 Explorer Concept mod is installed, its Settings, Control Panel, System and Windows Update pages (and Control Panel items it opens) show Better Panel's Home dashboard instead of folder details and file actions, and its hidden page folders are left out of Recent folders. Has no effect without that mod."
+  $name: Compatibility
+  $description: Behave well alongside other Explorer mods.
 */
 // ==/WindhawkModSettings==
 
@@ -604,11 +644,13 @@ using namespace std::string_view_literals;
 #include <initguid.h>
 
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <d2d1_1.h>
 #include <bcrypt.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <shlobj.h>
+#include <exdisp.h>
 #include <shobjidl.h>
 #include <uiautomationclient.h>
 #include <knownfolders.h>
@@ -645,6 +687,8 @@ using namespace std::string_view_literals;
 #include <winrt/Windows.Storage.FileProperties.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.Storage.h>
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
+#include <winrt/Windows.ApplicationModel.DataTransfer.DragDrop.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.UI.h>
 #include <winrt/Windows.UI.Text.h>
@@ -828,6 +872,11 @@ enum class BetterPanelAppearanceTheme {
 };
 
 enum class BetterPanelButtonShape { Theme, Square, Soft, Round, Pill };
+enum class BetterPanelMaterial { Theme, Transparent, Tinted };
+enum class BetterPanelWindowAttach {
+    Right, Left, ScreenRight, ScreenLeft, Free, ScreenTop, ScreenBottom,
+    CornerTopLeft, CornerTopRight, CornerBottomLeft, CornerBottomRight,
+};
 enum class BetterPanelAppearanceVariant { Light, Dark };
 
 struct {
@@ -853,6 +902,17 @@ struct {
     BetterPanelAppearanceTheme appearanceTheme =
         BetterPanelAppearanceTheme::System;
     BetterPanelButtonShape buttonShape = BetterPanelButtonShape::Theme;
+    BetterPanelMaterial material = BetterPanelMaterial::Theme;
+    bool windows12Compat = true;
+    BetterPanelWindowAttach windowAttach = BetterPanelWindowAttach::Right;
+    bool windowMatchHeight = true;
+    bool windowMakeRoom = true;
+    bool windowAlwaysOnTop = false;
+    bool windowMinimizeWithExplorer = true;
+    bool windowDetachOnDrag = true;
+    int windowSnapDistance = 24;  // how close to an edge snaps, in pixels
+    int windowSnapGap = 0;        // space left at screen edges and corners
+    bool windowStartInWorkspace = false;
     BetterPanelAppearanceVariant appearanceVariant =
         BetterPanelAppearanceVariant::Light;
 } g_settings;
@@ -1101,6 +1161,37 @@ struct BetterPanelScrollThemeSnapshot {
     bool themed = false;
 };
 
+struct BetterPanelWorkspace;
+
+// A weak reference to one of the panel's cards that can find the card again.
+// In Workspace boxes and restored pop-outs a plain weak reference to these
+// cards stopped resolving while they were still on screen, so Home could not
+// be hidden. When that happens, get() looks the card up by name among its
+// parent's children. Everything stays weak: XAML objects must never be held
+// (and so maybe released) outside their own UI thread.
+struct BetterPanelElementRef {
+    winrt::weak_ref<FrameworkElement> weak;
+    winrt::weak_ref<muxc::Panel> parent;
+    std::wstring name;
+    void Set(FrameworkElement const& element, muxc::Panel const& owner) {
+        weak = winrt::make_weak(element);
+        parent = winrt::make_weak(owner);
+        name = element.Name();
+    }
+    FrameworkElement get() const {
+        if (auto element = weak.get()) return element;
+        if (name.empty()) return nullptr;
+        if (auto owner = parent.get()) {
+            for (auto const& child : owner.Children()) {
+                if (auto element = child.try_as<FrameworkElement>();
+                    element && element.Name() == name) {
+                    return element;
+                }
+            }
+        }
+        return nullptr;
+    }
+};
 struct BetterPanelState {
     mud::DispatcherQueue dispatcher{nullptr};
     DWORD ownerThreadId = 0;
@@ -1118,6 +1209,10 @@ struct BetterPanelState {
     mux::Media::Brush nativeHostBackground{nullptr};
     winrt::weak_ref<muxc::Grid> detailsRootGrid;
     mux::Media::Brush nativeDetailsRootBackground{nullptr};
+    // Explorer elements above the Details pane whose backgrounds were cleared
+    // for a see-through panel material, with the brushes to restore.
+    std::vector<std::pair<winrt::weak_ref<FrameworkElement>, mux::Media::Brush>>
+        materialAncestors;
     std::unordered_map<void*, BetterPanelTextThemeSnapshot>
         nativePaneTextSnapshots;
     std::unordered_map<void*, BetterPanelScrollThemeSnapshot>
@@ -1125,6 +1220,11 @@ struct BetterPanelState {
     winrt::weak_ref<FrameworkElement> panel;
     winrt::weak_ref<muxc::StackPanel> startupLoadingHost;
     winrt::weak_ref<muxc::Button> detachButton;
+    winrt::weak_ref<muxc::Button> workspaceButton;
+    // "To Workspace" buttons (single and multi-selection rows): copy or move
+    // the selection into a Workspace box's folder.
+    winrt::weak_ref<muxc::Button> toWorkspaceButton;
+    winrt::weak_ref<muxc::Button> toWorkspaceMultiButton;
     winrt::weak_ref<muxc::Button> homeButton;
     std::optional<uint32_t> homeResourceIconTint;
     std::optional<uint32_t> detachResourceIconTint;
@@ -1140,6 +1240,8 @@ struct BetterPanelState {
         BetterPanelAppearanceVariant::Light;
     mux::Media::Brush appearanceBackground{nullptr};
     mux::Media::Brush appearanceSurface{nullptr};
+    // Background for a see-through panel material; null for Theme.
+    mux::Media::Brush appearanceMaterialBrush{nullptr};
     mux::Media::Brush appearanceButton{nullptr};
     mux::Media::Brush appearanceBorder{nullptr};
     mux::Media::Brush appearanceForeground{nullptr};
@@ -1152,6 +1254,7 @@ struct BetterPanelState {
     muxc::ControlTemplate appearanceButtonTemplate{nullptr};
     muxc::ControlTemplate appearanceToggleTemplate{nullptr};
     muxc::ControlTemplate appearanceRowTemplate{nullptr};
+    muxc::ControlTemplate appearanceSectionTemplate{nullptr};
     muxc::ControlTemplate appearanceContentActionTemplate{nullptr};
     Thickness appearanceBorderThickness{1};
     double appearanceButtonRadius = -1;
@@ -1166,6 +1269,68 @@ struct BetterPanelState {
     uint32_t detachedPanelIndex = 0;
     HWND detachedWindow = nullptr;
     HWND detachedIslandWindow = nullptr;
+    // Pop-out window behavior: where it currently sits, whether it is kept
+    // on top, and the hook that follows the Explorer window it belongs to.
+    BetterPanelWindowAttach detachedAttach = BetterPanelWindowAttach::Right;
+    bool detachedTopmost = false;
+    bool detachedPositioning = false;
+    RECT detachedMoveStart{};
+    bool explorerFollowSubclassed = false;
+    // Link (null = the Explorer window the panel came from) and the window
+    // the follow subclass is installed on.
+    HWND linkedWindow = nullptr;
+    HWND followHookedWindow = nullptr;
+    // Workspace: up to four Better Panels shown instead of the single panel.
+    BetterPanelWorkspace* workspace = nullptr;
+    bool workspaceMode = false;
+    // A panel living inside a Workspace box. It shows what the box keeps
+    // (below), not Explorer's selection, and has no pin or Workspace buttons.
+    bool workspaceBox = false;
+    // A pop-out opened on its own when Explorer starts (the panel was left
+    // popped out), without Explorer's Details pane. Its panel was built in a
+    // hidden carrier island instead of the pane, and goes with it on close.
+    bool standalone = false;
+    HWND carrierWindow = nullptr;
+    muxh::DesktopWindowXamlSource carrierSource{nullptr};
+    // The pop-out draws its own title bar (Minimize and Pin instead of the
+    // usual window buttons). Minimize turns it into a small floating button.
+    bool customFrame = false;
+    int captionHover = -1;  // 0 minimize, 1 pin
+    int captionPressed = -1;
+    bool captionTracking = false;
+    // Dragging by the title bar is done here rather than by Windows, so
+    // Windows' own snapping (maximize at the top, halves at the sides)
+    // doesn't take over from Better Panel's docking.
+    bool captionDragging = false;
+    POINT captionDragCursor{};
+    DWORD captionLastClick = 0;
+    POINT captionLastClickPoint{};
+    // The size the user gave the pop-out. Docks stretch only the side they
+    // fill (with "Match height"), so switching docks never compounds sizes.
+    SIZE detachedSize{};
+    HWND widgetWindow = nullptr;
+    // Quick Peek: the floating button's pop-up list of drop destinations.
+    HWND peekWindow = nullptr;
+    // What a Workspace box shows: the items it took from Explorer, their
+    // folder, or Home. The panel shows these instead of Explorer's
+    // selection, so a box keeps them until the Workspace updates it.
+    std::vector<std::wstring> workspacePaths;
+    std::wstring workspaceFolder;
+    bool workspaceHome = false;
+    // Making room: Explorer is being moved or resized by the user, and how
+    // much (and on which side) the mod narrowed it for an attached pop-out.
+    bool explorerMoving = false;
+    RECT explorerLoopStart{};
+    // Explorer's own width before the panel squashed it (visible pixels,
+    // 0 when not squashed); later drags grow it back to this.
+    int explorerNaturalWidth = 0;
+    int explorerShrunk = 0;
+    BetterPanelWindowAttach explorerShrunkSide = BetterPanelWindowAttach::Right;
+    // The pop-out settings last applied, so a change in Windhawk applies at
+    // once without undoing choices made from the title-bar menu.
+    BetterPanelWindowAttach appliedAttachSetting = BetterPanelWindowAttach::Right;
+    bool appliedTopmostSetting = false;
+    bool appliedMinimizeSetting = true;
     bool detached = false;
     bool changingDetachedState = false;
     bool reattachRequested = false;
@@ -1259,6 +1424,14 @@ struct BetterPanelState {
     winrt::weak_ref<muxc::Button> textHandlerPreviewButton;
     winrt::event_token textHandlerLayoutToken{};
     winrt::com_ptr<IPreviewHandler> textHandler;
+    // In a Workspace box, preview-handler windows go in the Workspace host and
+    // are clipped to the box's island; elsewhere they use the pop-out or
+    // Explorer window.
+    HWND previewParentWindow = nullptr;
+    HWND previewClipWindow = nullptr;
+    // Where the preview-handler window was last put, and its visible part.
+    RECT textHandlerPlaced{};
+    RECT textHandlerVisible{};
     HWND textHandlerWindow = nullptr;
     std::wstring textHandlerPath;
     bool documentPreviewEnabled = false;
@@ -1315,15 +1488,18 @@ struct BetterPanelState {
     std::wstring deleteCheckPath;
     bool deleteCheckAllowed = false;
     uint64_t buttonStyleGeneration = 0;
-    winrt::weak_ref<FrameworkElement> insightsCard;
-    winrt::weak_ref<FrameworkElement> homeCard;
+    // Held directly, not weakly: in Workspace boxes and restored pop-outs a
+    // weak reference to these cards stopped resolving while they were still
+    // on screen, so Home could never be hidden again.
+    BetterPanelElementRef insightsCard;
+    BetterPanelElementRef homeCard;
     winrt::weak_ref<muxc::StackPanel> homeContent;
-    winrt::weak_ref<FrameworkElement> driveCard;
+    BetterPanelElementRef driveCard;
     winrt::weak_ref<muxc::StackPanel> driveContent;
     winrt::weak_ref<muxc::StackPanel> insightsContent;
     winrt::weak_ref<muxc::ProgressBar> insightsLoadingBar;
     winrt::weak_ref<muxc::Button> insightsToggleButton;
-    winrt::weak_ref<FrameworkElement> metadataCard;
+    BetterPanelElementRef metadataCard;
     winrt::weak_ref<muxc::StackPanel> metadataContent;
     winrt::weak_ref<muxc::Button> metadataToggleButton;
     winrt::weak_ref<muxc::TextBox> metadataTitle;
@@ -2177,25 +2353,28 @@ struct BetterPanelAppearanceMetrics {
 
 BetterPanelAppearanceMetrics BetterPanelGetAppearanceMetrics() {
     using Theme = BetterPanelAppearanceTheme;
+    // Font lists fall back in order. Ubuntu, Lucida Grande and SF Pro are not
+    // shipped with Windows; they are used when the user has installed them.
     switch (g_settings.appearanceTheme) {
     case Theme::XP:
         return {L"Tahoma", 0.92, 15, 12, 7, 3, 32, 20, 46, 32, 26, 17};
     case Theme::Vista:
-        return {L"Segoe UI", 0.98, 17, 13, 10, 5, 36, 24, 53, 38, 30, 15};
+        return {L"Segoe UI", 0.98, 17, 13, 10, 5, 36, 24, 53, 38, 30, 17};
     case Theme::Win7:
-        return {L"Segoe UI", 0.97, 17, 13, 9, 4, 36, 23, 51, 36, 27, 13};
+        return {L"Segoe UI", 0.97, 17, 13, 9, 4, 36, 23, 51, 36, 27, 17};
     case Theme::Win8:
-        return {L"Segoe UI", 0.98, 16, 13, 9, 4, 34, 22, 48, 35, 0, 12};
+        return {L"Segoe UI", 0.98, 16, 13, 9, 4, 34, 22, 48, 35, 0, 17};
     case Theme::Ubuntu:
-        return {L"Trebuchet MS", 0.97, 16, 12.5, 9, 4, 34, 22,
-                50, 35, 27, 13};
+        return {L"Ubuntu, Trebuchet MS, Segoe UI", 0.97, 16, 12.5, 9, 4, 34,
+                22, 50, 35, 27, 13};
     case Theme::MacAqua:
-        return {L"Lucida Sans Unicode", 0.91, 15, 12, 8, 3, 32, 20,
-                46, 33, 25, 15};
+        return {L"Lucida Grande, Lucida Sans Unicode, Segoe UI", 0.91, 15, 11,
+                8, 3, 32, 20, 46, 33, 25, 15};
     case Theme::MacOS:
-        return {L"Segoe UI Variable", 1.02, 17, 13, 13, 7, 38, 25, 55, 41, 34, 10};
+        return {L"SF Pro Text, Segoe UI Variable Text, Segoe UI", 1.0, 17, 11,
+                13, 7, 38, 25, 55, 41, 34, 10};
     case Theme::Win10:
-        return {L"Segoe UI", 1, 17, 13, 10, 5, 38, 24, 54, 39, 0, 12};
+        return {L"Segoe UI", 1, 17, 13, 10, 5, 38, 24, 54, 39, 0, 17};
     case Theme::OLED:
         return {L"Segoe UI", 1, 17, 13, 10, 5, 38, 24, 54, 39, 0, 12};
     case Theme::Slate:
@@ -2205,6 +2384,13 @@ BetterPanelAppearanceMetrics BetterPanelGetAppearanceMetrics() {
     }
 }
 
+// Colors are taken from each system's own visual style: window and pane
+// backgrounds, push-button borders, selection colors and title bars. Dark
+// variants use that system's own dark styling where one existed (Zune for XP,
+// Graphite for Aqua, Ambiance's dark chrome for Ubuntu) and a faithful
+// reinterpretation otherwise.
+// Fields: background, surface, button, border, foreground, headerTop,
+// headerBottom, accent, radius, margin, spacing.
 BetterPanelAppearancePalette BetterPanelGetAppearancePalette() {
     using Theme = BetterPanelAppearanceTheme;
     bool dark = g_settings.appearanceVariant ==
@@ -2212,68 +2398,74 @@ BetterPanelAppearancePalette BetterPanelGetAppearancePalette() {
     switch (g_settings.appearanceTheme) {
     case Theme::Win10:
         return dark
-            ? BetterPanelAppearancePalette{true, 0x202020, 0x2B2B2B,
-                0x303030, 0x606060, 0xF2F2F2, 0x0078D4, 0x005A9E,
-                0x0078D4, 0, 12, 8}
-            : BetterPanelAppearancePalette{true, 0xF4F4F4, 0xFFFFFF,
-                0xEAEAEA, 0xB9B9B9, 0x202020, 0x0078D4, 0x0067B8,
-                0x0078D4, 0, 12, 8};
+            ? BetterPanelAppearancePalette{true, 0x191919, 0x191919,
+                0x333333, 0x5C5C5C, 0xFFFFFF, 0x2B2B2B, 0x2B2B2B,
+                0x0078D7, 0, 12, 8}
+            : BetterPanelAppearancePalette{true, 0xFFFFFF, 0xFFFFFF,
+                0xE1E1E1, 0xADADAD, 0x000000, 0xF0F0F0, 0xF0F0F0,
+                0x0078D7, 0, 12, 8};
     case Theme::Win8:
         return dark
-            ? BetterPanelAppearancePalette{true, 0x17191C, 0x202226,
-                0x29496A, 0x628CAA, 0xF7FBFF, 0x2169AB, 0x2169AB,
-                0x2D91D3, 0, 10, 6}
+            ? BetterPanelAppearancePalette{true, 0x1D1D1D, 0x1D1D1D,
+                0x3C3C3C, 0x6A6A6A, 0xF0F0F0, 0x2D89EF, 0x2D89EF,
+                0x2D89EF, 0, 10, 6}
             : BetterPanelAppearancePalette{true, 0xFFFFFF, 0xFFFFFF,
-                0xD8EAF9, 0x71A5CE, 0x23394F, 0x468FD0, 0x468FD0,
-                0x0078D7, 0, 10, 6};
+                0xEBEBEB, 0xACACAC, 0x000000, 0x19478A, 0x19478A,
+                0x26A0DA, 0, 10, 6};
     case Theme::Win7:
         return dark
-            ? BetterPanelAppearancePalette{true, 0x292F36, 0x292F36,
-                0x39434D, 0x718596, 0xF2F5F8, 0x3B4C5C, 0x303E4D,
-                0x2684C5, 5, 14, 9}
+            ? BetterPanelAppearancePalette{true, 0x1E2933, 0x1E2933,
+                0x3F4B57, 0x1D252E, 0xEEF3F8, 0x3B4C5C, 0x2B3846,
+                0x3399FF, 3, 14, 9}
             : BetterPanelAppearancePalette{true, 0xFFFFFF, 0xFFFFFF,
-                0xE9F0F5, 0x9EAFBC, 0x273743, 0xF7FAFC, 0xDCEAF3,
-                0x2386CC, 5, 14, 9};
+                0xEBEBEB, 0x707070, 0x000000, 0xF7FAFD, 0xDAE6F3,
+                0x3399FF, 3, 14, 9};
     case Theme::Vista:
         return dark
-            ? BetterPanelAppearancePalette{true, 0x111316, 0x151719,
-                0x303942, 0x697D8B, 0xF4F8FA, 0x5C6871, 0x080C12,
-                0x3BA6D4, 6, 14, 9}
+            ? BetterPanelAppearancePalette{true, 0x0D0F11, 0x0D0F11,
+                0x2E3439, 0x0C1013, 0xF2F6F8, 0x3E4A52, 0x050708,
+                0x5BB5DA, 3, 14, 9}
             : BetterPanelAppearancePalette{true, 0xFFFFFF, 0xFFFFFF,
-                0xD9E9EC, 0x7899A4, 0x233A43, 0x4CAAC1, 0x176D85,
-                0x218AAD, 6, 14, 9};
+                0xEBEBEB, 0x707070, 0x000000, 0x6E9DB2, 0x1E4D60,
+                0x3399FF, 3, 14, 9};
     case Theme::XP:
+        // Light is Luna Blue: the lavender task-pane group body behind
+        // lighter cards, a Luna title-bar header and dark-blue button
+        // borders. Dark is Microsoft's own Zune theme for XP.
         return dark
-            ? BetterPanelAppearancePalette{true, 0x102040, 0x1B3158,
-                0x415776, 0x819DC2, 0xF7F3E5, 0x3474C9, 0x15418B,
-                0x65A2F3, 4, 12, 7}
-            : BetterPanelAppearancePalette{true, 0xF8F7F1, 0xF8F7F1,
-                0xF6F6EE, 0x8199B2, 0x25334C, 0x56A2F6, 0x0A55CA,
-                0x2B74CF, 4, 12, 7};
+            ? BetterPanelAppearancePalette{true, 0x1E1E1E, 0x2B2B2B,
+                0x3C3C3C, 0x0B0B0B, 0xF2F2F2, 0x4B4B4B, 0x1A1A1A,
+                0xF7941D, 3, 12, 7}
+            : BetterPanelAppearancePalette{true, 0xD6DFF7, 0xEEF3FD,
+                0xF4F3EE, 0x003C74, 0x000000, 0x3D95FF, 0x0050E0,
+                0x316AC5, 3, 12, 7};
     case Theme::MacOS:
+        // macOS Tahoe: Finder's inspector colors and capsule-shaped controls.
         return dark
-            ? BetterPanelAppearancePalette{true, 0x202124, 0x242529,
-                0x3A3D43, 0x6B7079, 0xF4F4F6, 0x4A4D54, 0x34363C,
-                0x0A84FF, 10, 14, 8}
-            : BetterPanelAppearancePalette{true, 0xF3F4F6, 0xFFFFFF,
-                0xF2F3F5, 0xC8CDD3, 0x24262B, 0xF7F8FA, 0xE7E9ED,
-                0x007AFF, 10, 14, 8};
+            ? BetterPanelAppearancePalette{true, 0x1E1E1E, 0x1E1E1E,
+                0x3A3A3C, 0x3A3A3C, 0xF5F5F7, 0x1E1E1E, 0x1E1E1E,
+                0x0A84FF, 16, 14, 8}
+            : BetterPanelAppearancePalette{true, 0xF5F5F7, 0xF5F5F7,
+                0xE8E8ED, 0xD2D2D7, 0x1D1D1F, 0xF5F5F7, 0xF5F5F7,
+                0x007AFF, 16, 14, 8};
     case Theme::MacAqua:
+        // Light is Snow Leopard's Aqua; dark uses Aqua's Graphite controls.
         return dark
-            ? BetterPanelAppearancePalette{true, 0x272B31, 0x363C43,
-                0x465361, 0x8394A5, 0xF5F7F9, 0x626B75, 0x393F48,
-                0x168BDF, 4, 14, 8}
-            : BetterPanelAppearancePalette{true, 0xE5E7E9, 0xFFFFFF,
-                0xE0E7ED, 0xA2ADB7, 0x29323D, 0xF8F9FA, 0xBEC8D1,
-                0x168BDF, 4, 14, 8};
+            ? BetterPanelAppearancePalette{true, 0x34373B, 0x34373B,
+                0x6D7783, 0x2B2F34, 0xEEF0F2, 0x5C6168, 0x3E4247,
+                0x8494A7, 11, 14, 8}
+            : BetterPanelAppearancePalette{true, 0xEDEDED, 0xEDEDED,
+                0xFFFFFF, 0x8E8E8E, 0x000000, 0xE8E8E8, 0xC5C5C5,
+                0x3875D7, 11, 14, 8};
     case Theme::Ubuntu:
+        // Ambiance: warm grey window, dark title chrome, orange accent.
         return dark
-            ? BetterPanelAppearancePalette{true, 0x292929, 0x2B2B2B,
-                0x3D3A38, 0x66605C, 0xF3F2F1, 0x323232, 0x252525,
-                0xD64B1C, 4, 14, 7}
-            : BetterPanelAppearancePalette{true, 0xF2F1F0, 0xF8F7F6,
-                0xE7E5E2, 0xAFA9A3, 0x3C3C3C, 0x4A4847, 0x343333,
-                0xDD4814, 4, 14, 7};
+            ? BetterPanelAppearancePalette{true, 0x3C3B37, 0x3C3B37,
+                0x55534E, 0x252422, 0xDFDBD2, 0x5A5953, 0x3C3B37,
+                0xF07746, 3, 14, 7}
+            : BetterPanelAppearancePalette{true, 0xF2F1F0, 0xF2F1F0,
+                0xEDECEB, 0xA9A49F, 0x3C3C3C, 0x5A5953, 0x3C3B37,
+                0xF07746, 3, 14, 7};
     case Theme::OLED:
         return dark
             ? BetterPanelAppearancePalette{true, 0x000000, 0x0C0C0C,
@@ -2382,8 +2574,8 @@ mux::Media::Brush BetterPanelAppearanceButtonBrush(
         return dark ? BetterPanelAppearanceHeaderBrush(0x525963, 0x343B43)
                     : BetterPanelAppearanceHeaderBrush(0xFFFFFF, 0xDDE7EF);
     case Theme::MacOS:
-        return dark ? BetterPanelAppearanceHeaderBrush(0x55585E, 0x393B41)
-                    : BetterPanelAppearanceHeaderBrush(0xFFFFFF, 0xE8EAEE);
+        return dark ? BetterPanelAppearanceAlphaBrush(0xFFFFFF, 0x1F)
+                    : BetterPanelAppearanceAlphaBrush(0x000000, 0x0F);
     case Theme::MacAqua:
         return dark ? BetterPanelAppearanceHeaderBrush(0x6A7886, 0x394550)
                     : BetterPanelAppearanceHeaderBrush(0xFFFFFF, 0xCDD8E2);
@@ -2413,25 +2605,323 @@ std::wstring BetterPanelAppearanceGradientXaml(uint32_t top,
            L"\" Offset=\"1\"/></LinearGradientBrush>";
 }
 
-// WinUI acrylic can blur content within Explorer's XAML island. It cannot
-// sample the desktop behind Explorer, so this is a scoped approximation of
-// macOS glass, with a solid fallback when transparency is unavailable.
-std::wstring BetterPanelMacOSGlassXaml(bool dark, int state) {
-    PCWSTR tint = dark ? L"#687585" : L"#FFFFFF";
-    PCWSTR fallback = dark ? L"#454C57" : L"#EEF2F7";
-    PCWSTR opacity = dark ? L"0.58" : L"0.68";
-    if (state == 1) {
-        tint = dark ? L"#8091A5" : L"#FFFFFF";
-        fallback = dark ? L"#566171" : L"#F8FAFD";
-        opacity = dark ? L"0.65" : L"0.76";
-    } else if (state == 2) {
-        tint = dark ? L"#384554" : L"#DCE4F0";
-        fallback = dark ? L"#353F4C" : L"#E4EAF2";
-        opacity = dark ? L"0.76" : L"0.82";
+// XAML numbers must use '.' whatever the process locale is.
+std::wstring BetterPanelXamlOffset(double offset) {
+    int thousandths =
+        static_cast<int>(std::lround(std::clamp(offset, 0.0, 1.0) * 1000));
+    std::wstring fraction = std::to_wstring(thousandths % 1000);
+    fraction.insert(0, 3 - fraction.size(), L'0');
+    return std::to_wstring(thousandths / 1000) + L"." + fraction;
+}
+
+std::wstring BetterPanelGradientStopsXaml(
+    std::initializer_list<std::pair<uint32_t, double>> stops) {
+    std::wstring xaml =
+        L"<LinearGradientBrush StartPoint=\"0,0\" EndPoint=\"0,1\">";
+    for (auto const& [color, offset] : stops) {
+        xaml += L"<GradientStop Color=\"" + BetterPanelAppearanceHex(color) +
+                L"\" Offset=\"" + BetterPanelXamlOffset(offset) + L"\"/>";
     }
-    return std::wstring(L"<AcrylicBrush TintColor=\"") + tint +
-        L"\" TintOpacity=\"" + opacity +
-        L"\" FallbackColor=\"" + fallback + L"\"/>";
+    return xaml + L"</LinearGradientBrush>";
+}
+
+// The Aero and Aqua "gel" face: a hard split halfway down the button.
+std::wstring BetterPanelGelXaml(uint32_t top, uint32_t upperMiddle,
+                                uint32_t lowerMiddle, uint32_t bottom) {
+    return BetterPanelGradientStopsXaml({{top, 0.0},
+                                         {upperMiddle, 0.5},
+                                         {lowerMiddle, 0.5},
+                                         {bottom, 1.0}});
+}
+
+std::wstring BetterPanelFlatXaml(uint32_t color) {
+    return BetterPanelAppearanceGradientXaml(color, color);
+}
+
+// One theme's push-button look in every state, modelled on that system's own
+// visual style rather than on recolored Windows 11 buttons.
+struct BetterPanelButtonChrome {
+    std::wstring normal;
+    std::wstring hover;
+    std::wstring pressed;
+    std::wstring checked;
+    std::wstring border;
+    std::wstring hoverBorder;
+    std::wstring pressedBorder;
+    std::wstring faceHighlight;  // inner 1px highlight; empty for none
+    std::wstring glow;           // XP's hover glow ring; empty for none
+    PCWSTR edge = L"1";
+    PCWSTR glossOpacity = L"0";
+    PCWSTR glossHeight = L"3";
+    PCWSTR pressedGloss = L"0";
+};
+
+BetterPanelButtonChrome BetterPanelGetButtonChrome(
+    BetterPanelAppearanceTheme theme,
+    BetterPanelAppearancePalette const& palette) {
+    using Theme = BetterPanelAppearanceTheme;
+    bool dark = g_settings.appearanceVariant ==
+                BetterPanelAppearanceVariant::Dark;
+    auto hex = [](uint32_t rgb) { return BetterPanelAppearanceHex(rgb); };
+    BetterPanelButtonChrome chrome;
+    switch (theme) {
+    case Theme::XP:
+        if (dark) {
+            // Zune: charcoal buttons that glow orange under the pointer.
+            chrome.normal = BetterPanelGradientStopsXaml(
+                {{0x5C5C5C, 0.0}, {0x3F3F3F, 0.45}, {0x2C2C2C, 0.9},
+                 {0x222222, 1.0}});
+            chrome.pressed = BetterPanelGradientStopsXaml(
+                {{0x1A1A1A, 0.0}, {0x2A2A2A, 0.3}, {0x3A3A3A, 1.0}});
+            chrome.border = hex(0x0B0B0B);
+            chrome.glow = BetterPanelGradientStopsXaml(
+                {{0xFFC77A, 0.0}, {0xF7941D, 1.0}});
+        } else {
+            // Luna: white-to-beige face, dark-blue border, orange hover ring
+            // and a darker, inverted face while pressed.
+            chrome.normal = BetterPanelGradientStopsXaml(
+                {{0xFFFFFF, 0.0}, {0xF7F7F3, 0.4}, {0xECEBE6, 0.85},
+                 {0xD6D0C5, 1.0}});
+            chrome.pressed = BetterPanelGradientStopsXaml(
+                {{0xCDCAC3, 0.0}, {0xE3E3DB, 0.3}, {0xF2F2EF, 1.0}});
+            chrome.border = hex(0x003C74);
+            chrome.glow = BetterPanelGradientStopsXaml(
+                {{0xFFF0CF, 0.0}, {0xF8B330, 1.0}});
+        }
+        chrome.hover = chrome.normal;
+        chrome.checked = chrome.pressed;
+        chrome.hoverBorder = chrome.border;
+        chrome.pressedBorder = chrome.border;
+        break;
+    case Theme::Vista:
+    case Theme::Win7: {
+        bool vista = theme == Theme::Vista;
+        if (dark) {
+            chrome.normal = vista
+                ? BetterPanelGelXaml(0x6B757D, 0x3A434B, 0x1E252B, 0x2B353D)
+                : BetterPanelGelXaml(0x5A6573, 0x3E4855, 0x2E3743, 0x3A4552);
+            chrome.hover = vista
+                ? BetterPanelGelXaml(0x7FA4B8, 0x456E84, 0x1D4A62, 0x2E6683)
+                : BetterPanelGelXaml(0x6E8DAF, 0x4C6F95, 0x2F5880, 0x40709F);
+            chrome.pressed = vista
+                ? BetterPanelGelXaml(0x163A50, 0x1F4C66, 0x2C6B8C, 0x3D86AB)
+                : BetterPanelGelXaml(0x284D73, 0x33608D, 0x447CB0, 0x5A95C9);
+            chrome.border = hex(vista ? 0x0C1013 : 0x1D252E);
+            chrome.hoverBorder = hex(vista ? 0x5BB5DA : 0x76B4E6);
+            chrome.pressedBorder = hex(vista ? 0x3C8DB5 : 0x4F8FCB);
+            chrome.faceHighlight = L"#33FFFFFF";
+        } else {
+            // The Aero push button shared by Vista and Windows 7: grey glass,
+            // pale blue under the pointer and deeper blue while pressed.
+            chrome.normal =
+                BetterPanelGelXaml(0xF2F2F2, 0xEBEBEB, 0xDDDDDD, 0xCFCFCF);
+            chrome.hover =
+                BetterPanelGelXaml(0xEAF6FD, 0xD9F0FC, 0xBEE6FD, 0xA7D9F5);
+            chrome.pressed =
+                BetterPanelGelXaml(0xE5F4FC, 0xC4E5F6, 0x98D1EF, 0x68B3DB);
+            chrome.border = hex(0x707070);
+            chrome.hoverBorder = hex(0x3C7FB1);
+            chrome.pressedBorder = hex(0x2C628B);
+            chrome.faceHighlight = L"#B3FFFFFF";
+        }
+        chrome.checked = chrome.pressed;
+        break;
+    }
+    case Theme::Win8:
+        if (dark) {
+            chrome.normal = BetterPanelFlatXaml(0x3C3C3C);
+            chrome.hover = BetterPanelFlatXaml(0x3E5266);
+            chrome.pressed = BetterPanelFlatXaml(0x1E4F7F);
+            chrome.checked = BetterPanelFlatXaml(0x2D89EF);
+            chrome.border = hex(0x6A6A6A);
+            chrome.hoverBorder = hex(0x2D89EF);
+            chrome.pressedBorder = hex(0x2D89EF);
+        } else {
+            // Windows 8 kept a faint vertical gradient on push buttons.
+            chrome.normal = BetterPanelAppearanceGradientXaml(0xF0F0F0, 0xE5E5E5);
+            chrome.hover = BetterPanelAppearanceGradientXaml(0xECF4FC, 0xDCECFC);
+            chrome.pressed = BetterPanelAppearanceGradientXaml(0xDAECFC, 0xC4E0FC);
+            chrome.checked = chrome.pressed;
+            chrome.border = hex(0xACACAC);
+            chrome.hoverBorder = hex(0x7EB4EA);
+            chrome.pressedBorder = hex(0x569DE5);
+        }
+        break;
+    case Theme::Win10:
+        if (dark) {
+            chrome.normal = BetterPanelFlatXaml(0x333333);
+            chrome.hover = BetterPanelFlatXaml(0x454545);
+            chrome.pressed = BetterPanelFlatXaml(0x666666);
+            chrome.checked = BetterPanelFlatXaml(0x0078D7);
+            chrome.border = hex(0x5C5C5C);
+            chrome.hoverBorder = hex(0x9A9A9A);
+            chrome.pressedBorder = hex(0x9A9A9A);
+        } else {
+            // Windows 10's flat grey button with a blue hover border.
+            chrome.normal = BetterPanelFlatXaml(0xE1E1E1);
+            chrome.hover = BetterPanelFlatXaml(0xE5F1FB);
+            chrome.pressed = BetterPanelFlatXaml(0xCCE4F7);
+            chrome.checked = chrome.pressed;
+            chrome.border = hex(0xADADAD);
+            chrome.hoverBorder = hex(0x0078D7);
+            chrome.pressedBorder = hex(0x005499);
+        }
+        break;
+    case Theme::Ubuntu:
+        if (dark) {
+            chrome.normal = BetterPanelAppearanceGradientXaml(0x5D5B56, 0x4A4844);
+            chrome.hover = BetterPanelAppearanceGradientXaml(0x6A6862, 0x55534E);
+            chrome.pressed = BetterPanelAppearanceGradientXaml(0x3A3936, 0x46443F);
+            chrome.border = hex(0x252422);
+            chrome.hoverBorder = chrome.border;
+            chrome.pressedBorder = chrome.border;
+        } else {
+            chrome.normal = BetterPanelAppearanceGradientXaml(0xFBFBFA, 0xE6E4E1);
+            chrome.hover = BetterPanelAppearanceGradientXaml(0xFFFFFF, 0xEFEEEC);
+            chrome.pressed = BetterPanelAppearanceGradientXaml(0xD6D3CE, 0xE6E4E1);
+            chrome.border = hex(0xA9A49F);
+            chrome.hoverBorder = hex(0x9C9690);
+            chrome.pressedBorder = hex(0x8E8780);
+        }
+        chrome.checked = BetterPanelFlatXaml(0xF07746);
+        chrome.glossOpacity = L"0.12";
+        break;
+    case Theme::MacAqua:
+        if (dark) {
+            // Graphite: Aqua's own grey control appearance.
+            chrome.normal =
+                BetterPanelGelXaml(0x9AA4AF, 0x7D8894, 0x66717D, 0x85909C);
+            chrome.pressed =
+                BetterPanelGelXaml(0x6C7783, 0x56616D, 0x434D58, 0x5F6A76);
+            chrome.border = hex(0x2B2F34);
+            chrome.pressedBorder = chrome.border;
+            chrome.faceHighlight = L"#40FFFFFF";
+        } else {
+            // White gel buttons that turn blue gel while pressed. Aqua had
+            // no hover state.
+            chrome.normal =
+                BetterPanelGelXaml(0xFDFDFD, 0xF1F1F1, 0xE2E2E2, 0xF7F7F7);
+            chrome.pressed =
+                BetterPanelGelXaml(0xC7DEF8, 0x86B5EE, 0x4F8FE3, 0x9CCBF8);
+            chrome.border = hex(0x8E8E8E);
+            chrome.pressedBorder = hex(0x3D6AB0);
+            chrome.faceHighlight = L"#CCFFFFFF";
+        }
+        chrome.hover = chrome.normal;
+        chrome.hoverBorder = chrome.border;
+        chrome.checked = chrome.pressed;
+        break;
+    case Theme::MacOS: {
+        // Tahoe: borderless capsules with a soft translucent fill that
+        // deepens under the pointer, and the accent color when switched on.
+        auto fill = [](PCWSTR color) {
+            return std::wstring(L"<SolidColorBrush Color=\"") + color +
+                   L"\"/>";
+        };
+        chrome.normal = fill(dark ? L"#1FFFFFFF" : L"#0F000000");
+        chrome.hover = fill(dark ? L"#2EFFFFFF" : L"#18000000");
+        chrome.pressed = fill(dark ? L"#40FFFFFF" : L"#26000000");
+        chrome.checked = BetterPanelFlatXaml(palette.accent);
+        chrome.border = L"Transparent";
+        chrome.hoverBorder = L"Transparent";
+        chrome.pressedBorder = L"Transparent";
+        chrome.edge = L"0";
+        break;
+    }
+    default:
+        chrome.normal = BetterPanelFlatXaml(palette.button);
+        chrome.hover = BetterPanelFlatXaml(palette.accent);
+        chrome.pressed = BetterPanelFlatXaml(palette.accent);
+        chrome.checked = BetterPanelFlatXaml(palette.accent);
+        chrome.border = hex(palette.border);
+        chrome.hoverBorder = hex(palette.accent);
+        chrome.pressedBorder = hex(palette.accent);
+        chrome.edge = L"0";
+        break;
+    }
+    return chrome;
+}
+
+std::wstring BetterPanelAppearanceControlTemplateXaml(
+    BetterPanelAppearanceTheme theme,
+    BetterPanelAppearancePalette const& palette,
+    double radius,
+    bool toggle) {
+    using Theme = BetterPanelAppearanceTheme;
+    bool dark = g_settings.appearanceVariant ==
+                BetterPanelAppearanceVariant::Dark;
+    auto chrome = BetterPanelGetButtonChrome(theme, palette);
+    auto corner = std::to_wstring(static_cast<int>(radius));
+    auto innerCorner =
+        std::to_wstring(std::max(0, static_cast<int>(radius) - 1));
+    std::wstring glowSetter = chrome.glow.empty()
+        ? std::wstring()
+        : std::wstring(LR"(<Setter Target="Glow.Opacity" Value="1"/>)");
+    std::wstring xaml =
+        LR"(<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType=")" +
+        std::wstring(toggle ? L"ToggleButton" : L"Button") +
+        LR"("><Grid><VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates"><VisualState x:Name="Normal"/><VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Face.Background"><Setter.Value>)" +
+        chrome.hover +
+        LR"(</Setter.Value></Setter><Setter Target="Chrome.BorderBrush" Value=")" +
+        chrome.hoverBorder + LR"("/>)" + glowSetter +
+        LR"(</VisualState.Setters></VisualState><VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Face.Background"><Setter.Value>)" +
+        chrome.pressed +
+        LR"(</Setter.Value></Setter><Setter Target="Chrome.BorderBrush" Value=")" +
+        chrome.pressedBorder +
+        LR"("/><Setter Target="Gloss.Opacity" Value=")" + chrome.pressedGloss +
+        LR"("/></VisualState.Setters></VisualState><VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="ContentRoot.Opacity" Value="0.45"/><Setter Target="Gloss.Opacity" Value="0"/></VisualState.Setters></VisualState></VisualStateGroup>)";
+    if (toggle) {
+        xaml += LR"(<VisualStateGroup x:Name="CheckStates"><VisualState x:Name="Unchecked"/><VisualState x:Name="Checked"><VisualState.Setters><Setter Target="Face.Background"><Setter.Value>)" +
+            chrome.checked +
+            LR"(</Setter.Value></Setter></VisualState.Setters></VisualState><VisualState x:Name="Indeterminate"/></VisualStateGroup>)";
+    }
+    // XP and Windows Classic mark keyboard focus with a dotted rectangle.
+    auto focusTarget = theme == Theme::XP ? L"FocusDots" : L"FocusOutline";
+    xaml += LR"(<VisualStateGroup x:Name="FocusStates"><VisualState x:Name="Unfocused"/><VisualState x:Name="Focused"><VisualState.Setters><Setter Target=")" +
+        std::wstring(focusTarget) +
+        LR"(.Opacity" Value="1"/></VisualState.Setters></VisualState><VisualState x:Name="PointerFocused"/></VisualStateGroup>)";
+    std::wstring macHighlights;  // Tahoe controls carry no gloss or rim
+    xaml += LR"(</VisualStateManager.VisualStateGroups><Border x:Name="Chrome" CornerRadius=")" +
+        corner + LR"(" BorderThickness=")" + chrome.edge +
+        LR"(" BorderBrush=")" + chrome.border +
+        LR"("><Grid><Border x:Name="Face" CornerRadius=")" + innerCorner +
+        LR"(" BorderThickness=")" +
+        std::wstring(chrome.faceHighlight.empty() ? L"0" : L"1") +
+        LR"(" BorderBrush=")" +
+        (chrome.faceHighlight.empty() ? std::wstring(L"Transparent")
+                                      : chrome.faceHighlight) +
+        LR"("><Border.Background>)" + chrome.normal +
+        LR"(</Border.Background></Border><Border x:Name="Gloss" CornerRadius=")" +
+        innerCorner + LR"(" Height=")" + chrome.glossHeight +
+        LR"(" VerticalAlignment="Top" Background="#55FFFFFF" Opacity=")" +
+        chrome.glossOpacity + LR"(" IsHitTestVisible="False"/>)" +
+        macHighlights +
+        LR"(<Border x:Name="Glow" CornerRadius=")" + innerCorner +
+        LR"(" BorderThickness="2" Opacity="0" IsHitTestVisible="False"><Border.BorderBrush>)" +
+        (chrome.glow.empty()
+             ? std::wstring(LR"(<SolidColorBrush Color="Transparent"/>)")
+             : chrome.glow) +
+        LR"(</Border.BorderBrush></Border><ContentPresenter x:Name="ContentRoot" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="{TemplateBinding Padding}"/><Border x:Name="FocusOutline" Margin="2" CornerRadius=")" +
+        innerCorner + LR"(" BorderThickness="1" BorderBrush=")" +
+        BetterPanelAppearanceHex(palette.accent) +
+        LR"(" Opacity="0" IsHitTestVisible="False"/><Rectangle x:Name="FocusDots" Margin="3" Stroke=")" +
+        BetterPanelAppearanceHex(dark ? 0xFFFFFF : 0x000000) +
+        LR"(" StrokeThickness="1" StrokeDashArray="1,2" Opacity="0" IsHitTestVisible="False"/></Grid></Border></Grid></ControlTemplate>)";
+    return xaml;
+}
+
+muxc::ControlTemplate BetterPanelLoadControlTemplate(
+    std::wstring const& xaml, PCWSTR what) {
+    try {
+        return mux::Markup::XamlReader::Load(xaml).as<muxc::ControlTemplate>();
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Appearance %s template parse error %08X: %s", what,
+               ex.code(), ex.message().c_str());
+    } catch (...) {
+        Wh_Log(L"Appearance %s template parse error %08X", what,
+               winrt::to_hresult().value);
+    }
+    return nullptr;
 }
 
 // Better Panel owns these controls. Give them their own stateful chrome rather
@@ -2441,192 +2931,15 @@ muxc::ControlTemplate BetterPanelAppearanceControlTemplate(
     BetterPanelAppearancePalette const& palette,
     double radius,
     bool toggle) {
-    using Theme = BetterPanelAppearanceTheme;
-    bool dark = g_settings.appearanceVariant ==
-                BetterPanelAppearanceVariant::Dark;
-    bool raised = theme == Theme::XP || theme == Theme::Vista ||
-                  theme == Theme::Win7 || theme == Theme::Ubuntu ||
-                  theme == Theme::MacAqua;
-    uint32_t top = palette.button;
-    uint32_t bottom = palette.button;
-    uint32_t hoverTop = palette.accent;
-    uint32_t hoverBottom = palette.button;
-    uint32_t pressedTop = palette.accent;
-    uint32_t pressedBottom = palette.accent;
-    switch (theme) {
-    case Theme::XP:
-        top = dark ? 0x617DA2 : 0xFFFFFF;
-        bottom = dark ? 0x2D4260 : 0xDCE3DC;
-        hoverTop = dark ? 0x81A7CD : 0xF8FEFF;
-        hoverBottom = dark ? 0x345D8B : 0xA9D4F3;
-        pressedTop = dark ? 0x244D7E : 0x92C0E5;
-        pressedBottom = dark ? 0x587EAE : 0xEAF7FF;
-        break;
-    case Theme::Vista:
-        top = dark ? 0x64717C : 0xFFFFFF;
-        bottom = dark ? 0x1B222A : 0xB4D0D4;
-        hoverTop = dark ? 0x91A9B8 : 0xFFFFFF;
-        hoverBottom = dark ? 0x253947 : 0x80BFD0;
-        pressedTop = dark ? 0x111D29 : 0x79ADBC;
-        pressedBottom = dark ? 0x546C7B : 0xE2F3F5;
-        break;
-    case Theme::Win7:
-        top = dark ? 0x525963 : 0xFFFFFF;
-        bottom = dark ? 0x343B43 : 0xDDE7EF;
-        hoverTop = dark ? 0x718A9D : 0xF4FBFF;
-        hoverBottom = dark ? 0x426078 : 0xC4E3F5;
-        pressedTop = dark ? 0x364B5E : 0xB5D5E8;
-        pressedBottom = dark ? 0x607789 : 0xE6F2F9;
-        break;
-    case Theme::MacOS:
-        top = dark ? 0x53565D : 0xFFFFFF;
-        bottom = dark ? 0x393C43 : 0xECEEF2;
-        hoverTop = dark ? 0x62666E : 0xFFFFFF;
-        hoverBottom = dark ? 0x474B54 : 0xE2E6EC;
-        pressedTop = dark ? 0x32363E : 0xD9DCE2;
-        pressedBottom = dark ? 0x464B56 : 0xEFF1F4;
-        break;
-    case Theme::MacAqua:
-        top = dark ? 0x687987 : 0xFFFFFF;
-        bottom = dark ? 0x3B4753 : 0xCCD9E5;
-        hoverTop = dark ? 0x829DB4 : 0xFFFFFF;
-        hoverBottom = dark ? 0x456B8D : 0xB8DDF8;
-        pressedTop = dark ? 0x0B6DC5 : 0x75C2FF;
-        pressedBottom = dark ? 0x4FA7F1 : 0x0878D5;
-        break;
-    case Theme::Ubuntu:
-        top = dark ? 0x4A4745 : 0xFFFFFF;
-        bottom = dark ? 0x343231 : 0xDCDAD6;
-        hoverTop = dark ? 0x59534E : 0xFFFFFF;
-        hoverBottom = dark ? 0x3D3936 : 0xE8E3DC;
-        pressedTop = dark ? 0x2B2928 : 0xD2C8BF;
-        pressedBottom = dark ? 0x403A35 : 0xF3E9E1;
-        break;
-    case Theme::Win8:
-        hoverTop = hoverBottom = dark ? 0x3673A2 : 0xBCDDF4;
-        pressedTop = pressedBottom = palette.accent;
-        break;
-    default:
-        hoverTop = hoverBottom = palette.accent;
-        break;
-    }
-    auto normal = theme == Theme::MacOS
-        ? BetterPanelMacOSGlassXaml(dark, 0)
-        : BetterPanelAppearanceGradientXaml(top, bottom);
-    auto hover = theme == Theme::MacOS
-        ? BetterPanelMacOSGlassXaml(dark, 1)
-        : BetterPanelAppearanceGradientXaml(hoverTop, hoverBottom);
-    auto pressed = theme == Theme::MacOS
-        ? BetterPanelMacOSGlassXaml(dark, 2)
-        : BetterPanelAppearanceGradientXaml(pressedTop, pressedBottom);
-    // Modern Finder's view switch reads as a material segment, not a blue
-    // push-button. Retain blue for row selection and compact primary actions.
-    auto accent = theme == Theme::MacOS
-        ? BetterPanelAppearanceGradientXaml(
-              dark ? 0x686B72 : 0xF9FAFC,
-              dark ? 0x4D5058 : 0xDFE3E9)
-        : BetterPanelAppearanceGradientXaml(palette.accent, palette.accent);
-    auto corner = std::to_wstring(static_cast<int>(radius));
-    auto inset = theme == Theme::XP ? L"0" : raised ? L"1" : L"0";
-    auto edge = (raised || theme == Theme::MacOS) ? L"1" : L"0";
-    auto hoverBorder = theme == Theme::MacOS
-        ? std::wstring(dark ? L"#AAEAF5FF" : L"#CCFFFFFF")
-        : BetterPanelAppearanceHex(palette.accent);
-    PCWSTR glossOpacity = theme == Theme::Vista ? L"0.88"
-        : theme == Theme::Win7 ? L"0.43"
-        : theme == Theme::MacAqua ? L"0.55"
-        : theme == Theme::Ubuntu ? L"0.12"
-        : theme == Theme::MacOS ? L"0.48"
-        : theme == Theme::XP ? L"0.10" : L"0";
-    PCWSTR glossHeight = theme == Theme::Vista ? L"14"
-        : theme == Theme::MacAqua ? L"9"
-        : theme == Theme::Win7 ? L"7"
-        : theme == Theme::MacOS ? L"1" : L"3";
-    PCWSTR pressedGloss = theme == Theme::Vista ? L"0.27"
-        : theme == Theme::Win7 ? L"0.12" : L"0";
-    std::wstring pressedBevel;
-    if (theme == Theme::XP) {
-        pressedBevel = LR"(<Setter Target="BevelTopLeft.BorderBrush" Value=")" +
-            BetterPanelAppearanceHex(dark ? 0x112C54 : 0x6C7786) +
-            LR"("/><Setter Target="BevelBottomRight.BorderBrush" Value=")" +
-            BetterPanelAppearanceHex(dark ? 0xA8CAEF : 0xFFFFFF) +
-            LR"("/>)";
-    }
-    std::wstring xaml =
-        LR"(<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType=")" +
-        std::wstring(toggle ? L"ToggleButton" : L"Button") +
-        LR"("><Grid><VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates"><VisualState x:Name="Normal"/><VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Face.Background"><Setter.Value>)" +
-        hover +
-        LR"(</Setter.Value></Setter><Setter Target="Chrome.BorderBrush" Value=")" +
-        hoverBorder +
-        LR"("/></VisualState.Setters></VisualState><VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Face.Background"><Setter.Value>)" +
-        pressed +
-        LR"(</Setter.Value></Setter><Setter Target="Gloss.Opacity" Value=")" +
-        pressedGloss + LR"("/>)" + pressedBevel +
-        LR"(</VisualState.Setters></VisualState><VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="ContentRoot.Opacity" Value="0.45"/><Setter Target="Gloss.Opacity" Value="0"/></VisualState.Setters></VisualState></VisualStateGroup>)";
-    if (toggle) {
-        xaml += LR"(<VisualStateGroup x:Name="CheckStates"><VisualState x:Name="Unchecked"/><VisualState x:Name="Checked"><VisualState.Setters><Setter Target="Face.Background"><Setter.Value>)" +
-            accent +
-            LR"(</Setter.Value></Setter></VisualState.Setters></VisualState><VisualState x:Name="Indeterminate"/></VisualStateGroup>)";
-    }
-    auto focusTarget = theme == Theme::XP ? L"FocusDots" : L"FocusOutline";
-    xaml += LR"(<VisualStateGroup x:Name="FocusStates"><VisualState x:Name="Unfocused"/><VisualState x:Name="Focused"><VisualState.Setters><Setter Target=")" +
-        std::wstring(focusTarget) +
-        LR"(.Opacity" Value="1"/></VisualState.Setters></VisualState><VisualState x:Name="PointerFocused"><VisualState.Setters><Setter Target=")" +
-        std::wstring(focusTarget) +
-        LR"(.Opacity" Value="1"/></VisualState.Setters></VisualState></VisualStateGroup>)";
-    xaml += LR"(</VisualStateManager.VisualStateGroups><Border x:Name="Chrome" CornerRadius=")" +
-        corner + LR"(" BorderThickness=")" + edge +
-        LR"(" BorderBrush=")" +
-        (theme == Theme::MacOS
-             ? std::wstring(dark ? L"#52FFFFFF" : L"#A8FFFFFF")
-             : BetterPanelAppearanceHex(palette.border)) +
-        LR"("><Grid Margin=")" + inset +
-        LR"("><Border x:Name="Face" CornerRadius=")" + corner +
-        LR"("><Border.Background>)" + normal +
-        LR"(</Border.Background></Border><Border x:Name="Gloss" CornerRadius=")" +
-        corner + LR"(" Height=")" + glossHeight +
-        LR"(" VerticalAlignment="Top" Background="#55FFFFFF" Opacity=")" +
-        glossOpacity +
-        LR"(" IsHitTestVisible="False"/>)" +
-        (theme == Theme::MacOS
-            ? std::wstring(
-                LR"(<Border CornerRadius=")") + corner +
-                LR"(" Margin="1" IsHitTestVisible="False"><Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color=")" +
-                (dark ? L"#35FFFFFF" : L"#70FFFFFF") +
-                LR"(" Offset="0"/><GradientStop Color="#0EFFFFFF" Offset="0.38"/><GradientStop Color="#00FFFFFF" Offset="0.76"/></LinearGradientBrush></Border.Background></Border><Border CornerRadius=")" +
-                corner +
-                LR"(" Margin="1" BorderThickness="1" IsHitTestVisible="False"><Border.BorderBrush><LinearGradientBrush StartPoint="0,0" EndPoint="1,1"><GradientStop Color=")" +
-                (dark ? L"#A0FFFFFF" : L"#FFFFFFFF") +
-                LR"(" Offset="0"/><GradientStop Color="#32FFFFFF" Offset="0.45"/><GradientStop Color="#0CFFFFFF" Offset="1"/></LinearGradientBrush></Border.BorderBrush></Border>)"
-            : std::wstring()) +
-        LR"(<Border x:Name="BevelTopLeft" BorderThickness="1,1,0,0" BorderBrush=")" +
-        BetterPanelAppearanceHex(dark ? 0xA8CAEF : 0xFFFFFF) +
-        LR"(" Opacity=")" + std::wstring(theme == Theme::XP ? L"1" : L"0") +
-        LR"(" IsHitTestVisible="False"/><Border x:Name="BevelBottomRight" BorderThickness="0,0,1,1" BorderBrush=")" +
-        BetterPanelAppearanceHex(dark ? 0x112C54 : 0x6C7786) +
-        LR"(" Opacity=")" + std::wstring(theme == Theme::XP ? L"1" : L"0") +
-        LR"(" IsHitTestVisible="False"/><ContentPresenter x:Name="ContentRoot" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="{TemplateBinding Padding}"/><Border x:Name="FocusOutline" Margin="2" CornerRadius=")" +
-        corner + LR"(" BorderThickness="1" BorderBrush=")" +
-        BetterPanelAppearanceHex(palette.accent) +
-        LR"(" Opacity="0" IsHitTestVisible="False"/><Rectangle x:Name="FocusDots" Margin="3" Stroke=")" +
-        BetterPanelAppearanceHex(dark ? 0xFFFFFF : 0x1C2D43) +
-        LR"(" StrokeThickness="1" StrokeDashArray="1,2" Opacity="0" IsHitTestVisible="False"/></Grid></Border></Grid></ControlTemplate>)";
-    try {
-        return mux::Markup::XamlReader::Load(xaml).as<muxc::ControlTemplate>();
-    } catch (winrt::hresult_error const& ex) {
-        Wh_Log(L"Appearance template parse error %08X: %s", ex.code(),
-               ex.message().c_str());
-    } catch (...) {
-        Wh_Log(L"Appearance template parse error %08X",
-               winrt::to_hresult().value);
-    }
-    return nullptr;
+    return BetterPanelLoadControlTemplate(
+        BetterPanelAppearanceControlTemplateXaml(theme, palette, radius,
+                                                 toggle),
+        toggle ? L"toggle" : L"button");
 }
 
 // Drive and location entries remain Buttons for navigation and accessibility,
-// but their template is a quiet list row, not a command-button face.
-muxc::ControlTemplate BetterPanelAppearanceRowTemplate(
+// but their template is the system's list-item selection, not a push button.
+std::wstring BetterPanelAppearanceRowTemplateXaml(
     BetterPanelAppearanceTheme theme,
     BetterPanelAppearancePalette const& palette) {
     using Theme = BetterPanelAppearanceTheme;
@@ -2636,86 +2949,186 @@ muxc::ControlTemplate BetterPanelAppearanceRowTemplate(
     uint32_t hoverBottom = hoverTop;
     uint32_t pressedTop = dark ? 0x426888 : 0xBEDFFF;
     uint32_t pressedBottom = pressedTop;
+    int64_t hoverBorder = -1;    // -1: no border in that state
+    int64_t pressedBorder = -1;
     uint32_t outline = palette.accent;
     int radius = 1;
     switch (theme) {
     case Theme::XP:
-        hoverTop = dark ? 0x4C8CD6 : 0xD6EEFF;
-        hoverBottom = dark ? 0x1D529B : 0x79B7ED;
-        pressedTop = dark ? 0x1B4E91 : 0x63A5E5;
-        pressedBottom = dark ? 0x3978C5 : 0xB8DEFB;
-        outline = dark ? 0x91C3FB : 0x0D4DAC;
+        // XP lists had no hover; selection used the system highlight.
+        hoverTop = hoverBottom = dark ? 0x333333 : 0xE8EEFB;
+        pressedTop = pressedBottom = dark ? 0x5A3A18 : 0xC1D2EE;
+        outline = dark ? 0xF7941D : 0x316AC5;
+        radius = 0;
         break;
     case Theme::Vista:
-        hoverTop = dark ? 0x4B7188 : 0xFFFFFF;
-        hoverBottom = dark ? 0x1A3448 : 0xC3EDFA;
-        pressedTop = dark ? 0x174363 : 0xA3DFF1;
-        pressedBottom = dark ? 0x315D78 : 0xE9FAFF;
-        outline = dark ? 0x66B4D3 : 0x64BBD0;
-        radius = 3;
-        break;
     case Theme::Win7:
-        hoverTop = dark ? 0x5584A9 : 0xFFFFFF;
-        hoverBottom = dark ? 0x2D5478 : 0xD5EEFC;
-        pressedTop = dark ? 0x2F6E9A : 0xB5DEF7;
-        pressedBottom = dark ? 0x3A759F : 0xE9F8FF;
-        outline = dark ? 0x76B4DD : 0x92C3EA;
+        // The Aero list item: soft blue gradient boxes with a blue outline.
+        if (dark) {
+            hoverTop = 0x2C4A5C; hoverBottom = 0x1E3746;
+            pressedTop = 0x1F4E68; pressedBottom = 0x2C6A8A;
+            hoverBorder = theme == Theme::Vista ? 0x3E6E88 : 0x4F7699;
+            pressedBorder = theme == Theme::Vista ? 0x5BB5DA : 0x76B4E6;
+        } else {
+            hoverTop = theme == Theme::Vista ? 0xFAFBFD : 0xF8FBFE;
+            hoverBottom = theme == Theme::Vista ? 0xEBF3FD : 0xE8F2FD;
+            pressedTop = 0xDCEBFC; pressedBottom = 0xC1DBFC;
+            hoverBorder = 0xB8D6FB;
+            pressedBorder = 0x7DA2CE;
+        }
+        outline = dark ? 0x76B4E6 : 0x7DA2CE;
         radius = 3;
         break;
     case Theme::Win8:
-        hoverTop = hoverBottom = dark ? 0x2A5272 : 0xE7F2FB;
-        pressedTop = pressedBottom = dark ? 0x3675A6 : 0xBCDDF4;
+        hoverTop = hoverBottom = dark ? 0x2A3F52 : 0xE5F3FB;
+        pressedTop = pressedBottom = dark ? 0x26496A : 0xCBE8F6;
+        hoverBorder = dark ? 0x3C6A8F : 0x70C0E7;
+        pressedBorder = dark ? 0x2D89EF : 0x26A0DA;
+        radius = 0;
+        break;
+    case Theme::Win10:
+        hoverTop = hoverBottom = dark ? 0x3A3A3A : 0xE5F3FF;
+        pressedTop = pressedBottom = dark ? 0x4D4D4D : 0xCCE8FF;
+        pressedBorder = dark ? 0x6E6E6E : 0x99D1FF;
         radius = 0;
         break;
     case Theme::Ubuntu:
-        hoverTop = hoverBottom = dark ? 0x3C3734 : 0xF7E8E1;
-        pressedTop = pressedBottom = dark ? 0x68402F : 0xF3D4C4;
-        outline = dark ? 0xD64B1C : 0xDD6D46;
+        hoverTop = hoverBottom = dark ? 0x4A4844 : 0xF6EAE3;
+        pressedTop = pressedBottom = dark ? 0x7A4A35 : 0xF8D2BF;
+        pressedBorder = 0xF07746;
+        outline = 0xF07746;
         radius = 2;
         break;
     case Theme::MacOS:
-        hoverTop = hoverBottom = dark ? 0x3B3D44 : 0xEDEFF3;
-        pressedTop = pressedBottom = dark ? 0x0A72D5 : 0x0A84FF;
-        outline = dark ? 0x5CA6FA : 0x83B8F1;
-        radius = 6;
+        outline = dark ? 0x0A84FF : 0x007AFF;
+        radius = 8;
         break;
     case Theme::MacAqua:
-        hoverTop = dark ? 0x5186B6 : 0xD9F1FF;
-        hoverBottom = dark ? 0x284D75 : 0x6CB4F3;
-        pressedTop = dark ? 0x2B6FA7 : 0xA6D8FF;
-        pressedBottom = dark ? 0x185183 : 0x387ED5;
-        outline = dark ? 0x6DAFEC : 0x82B7E8;
-        radius = 2;
+        hoverTop = hoverBottom = dark ? 0x3E4247 : 0xE6E6E6;
+        pressedTop = dark ? 0x7B8796 : 0xB5CDEF;
+        pressedBottom = dark ? 0x65717F : 0x93B3E6;
+        outline = dark ? 0x8494A7 : 0x3875D7;
+        radius = 3;
         break;
     default:
         break;
     }
+    auto borderSetters = [](int64_t color) {
+        if (color < 0) return std::wstring();
+        return LR"(<Setter Target="Row.BorderBrush" Value=")" +
+               BetterPanelAppearanceHex(static_cast<uint32_t>(color)) +
+               LR"("/><Setter Target="Row.BorderThickness" Value="1"/>)";
+    };
     auto hoverBrush = BetterPanelAppearanceGradientXaml(hoverTop, hoverBottom);
-    auto pressedBrush = BetterPanelAppearanceGradientXaml(pressedTop, pressedBottom);
-    auto borderColor = BetterPanelAppearanceHex(outline);
+    auto pressedBrush =
+        BetterPanelAppearanceGradientXaml(pressedTop, pressedBottom);
+    if (theme == Theme::MacOS) {
+        // Tahoe list highlights are translucent so they read on any
+        // material, including a see-through panel.
+        hoverBrush = dark ? LR"(<SolidColorBrush Color="#14FFFFFF"/>)"
+                          : LR"(<SolidColorBrush Color="#0D000000"/>)";
+        pressedBrush = dark ? LR"(<SolidColorBrush Color="#26FFFFFF"/>)"
+                            : LR"(<SolidColorBrush Color="#1A000000"/>)";
+    }
     auto corner = std::to_wstring(radius);
     std::wstring focusSetters = theme == Theme::XP
         ? LR"(<Setter Target="RowFocusDots.Opacity" Value="1"/>)"
-        : LR"(<Setter Target="Row.BorderBrush" Value=")" + borderColor +
-          LR"("/><Setter Target="Row.BorderThickness" Value="1"/>)";
-    std::wstring xaml =
+        : LR"(<Setter Target="Row.BorderBrush" Value=")" +
+              BetterPanelAppearanceHex(outline) +
+              LR"("/><Setter Target="Row.BorderThickness" Value="1"/>)";
+    return
         LR"(<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button"><Grid><VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates"><VisualState x:Name="Normal"/><VisualState x:Name="PointerOver"><VisualState.Setters><Setter Target="Row.Background"><Setter.Value>)" +
-        hoverBrush + LR"(</Setter.Value></Setter></VisualState.Setters></VisualState><VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Row.Background"><Setter.Value>)" +
-        pressedBrush + LR"(</Setter.Value></Setter></VisualState.Setters></VisualState><VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="RowContent.Opacity" Value="0.45"/></VisualState.Setters></VisualState></VisualStateGroup><VisualStateGroup x:Name="FocusStates"><VisualState x:Name="Unfocused"/><VisualState x:Name="Focused"><VisualState.Setters>)" +
+        hoverBrush + LR"(</Setter.Value></Setter>)" + borderSetters(hoverBorder) +
+        LR"(</VisualState.Setters></VisualState><VisualState x:Name="Pressed"><VisualState.Setters><Setter Target="Row.Background"><Setter.Value>)" +
+        pressedBrush + LR"(</Setter.Value></Setter>)" +
+        borderSetters(pressedBorder) +
+        LR"(</VisualState.Setters></VisualState><VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="RowContent.Opacity" Value="0.45"/></VisualState.Setters></VisualState></VisualStateGroup><VisualStateGroup x:Name="FocusStates"><VisualState x:Name="Unfocused"/><VisualState x:Name="Focused"><VisualState.Setters>)" +
         focusSetters + LR"(</VisualState.Setters></VisualState><VisualState x:Name="PointerFocused"/></VisualStateGroup></VisualStateManager.VisualStateGroups><Border x:Name="Row" CornerRadius=")" +
-        corner + LR"(" Background="Transparent" BorderThickness="0"><Grid><ContentPresenter x:Name="RowContent" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/><Rectangle x:Name="RowFocusDots" Margin="3" Stroke=")" +
-        BetterPanelAppearanceHex(dark ? 0xFFFFFF : 0x1C2D43) +
+        corner + LR"(" Background="Transparent" BorderBrush="Transparent" BorderThickness="0"><Grid><ContentPresenter x:Name="RowContent" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/><Rectangle x:Name="RowFocusDots" Margin="3" Stroke=")" +
+        BetterPanelAppearanceHex(dark ? 0xFFFFFF : 0x000000) +
         LR"(" StrokeThickness="1" StrokeDashArray="1,2" Opacity="0" IsHitTestVisible="False"/></Grid></Border></Grid></ControlTemplate>)";
-    try {
-        return mux::Markup::XamlReader::Load(xaml).as<muxc::ControlTemplate>();
-    } catch (winrt::hresult_error const& ex) {
-        Wh_Log(L"Appearance row template parse error %08X: %s",
-               ex.code(), ex.message().c_str());
-    } catch (...) {
-        Wh_Log(L"Appearance row template parse error %08X",
-               winrt::to_hresult().value);
+}
+
+muxc::ControlTemplate BetterPanelAppearanceRowTemplate(
+    BetterPanelAppearanceTheme theme,
+    BetterPanelAppearancePalette const& palette) {
+    return BetterPanelLoadControlTemplate(
+        BetterPanelAppearanceRowTemplateXaml(theme, palette), L"row");
+}
+
+// Collapsible section headers (Details, Metadata) drawn the way each system
+// drew grouped content: XP task-pane group bars, Aero headings over a divider
+// line, flat Windows 8/10 headers, and Mac source-list headings.
+std::wstring BetterPanelAppearanceSectionTemplateXaml(
+    BetterPanelAppearanceTheme theme,
+    BetterPanelAppearancePalette const& palette) {
+    using Theme = BetterPanelAppearanceTheme;
+    bool dark = g_settings.appearanceVariant ==
+                BetterPanelAppearanceVariant::Dark;
+    std::wstring normal = LR"(<SolidColorBrush Color="Transparent"/>)";
+    std::wstring hover;
+    std::wstring line = L"Transparent";
+    std::wstring hoverForeground;
+    std::wstring corner = L"0";
+    switch (theme) {
+    case Theme::XP:
+        normal = dark ? BetterPanelAppearanceGradientXaml(0x4B4B4B, 0x2B2B2B)
+                      : BetterPanelAppearanceGradientXaml(0xFFFFFF, 0xC6D3F7);
+        hoverForeground = BetterPanelAppearanceHex(dark ? 0xFFB45C : 0x428EFF);
+        corner = L"3,3,0,0";
+        break;
+    case Theme::Vista:
+    case Theme::Win7:
+        line = BetterPanelAppearanceHex(
+            dark ? 0x3A4C5A : (theme == Theme::Vista ? 0xD5E2EA : 0xE2E9F1));
+        hoverForeground = BetterPanelAppearanceHex(dark ? 0x7FC4EC : 0x3399FF);
+        break;
+    case Theme::Win8:
+        hover = BetterPanelFlatXaml(dark ? 0x2A3F52 : 0xE5F3FB);
+        break;
+    case Theme::Win10:
+        hover = BetterPanelFlatXaml(dark ? 0x2D2D2D : 0xE5F3FF);
+        break;
+    case Theme::Ubuntu:
+        line = BetterPanelAppearanceHex(dark ? 0x2B2A27 : 0xD6D2CC);
+        hoverForeground = BetterPanelAppearanceHex(0xF07746);
+        break;
+    case Theme::MacAqua:
+    case Theme::MacOS:
+        break;
+    default:
+        hover = BetterPanelFlatXaml(dark ? 0x2A2A2A : 0xEAEAEA);
+        break;
     }
-    return nullptr;
+    std::wstring hoverSetters;
+    if (!hover.empty()) {
+        hoverSetters += LR"(<Setter Target="Header.Background"><Setter.Value>)" +
+                        hover + LR"(</Setter.Value></Setter>)";
+    }
+    if (!hoverForeground.empty()) {
+        hoverSetters += LR"(<Setter Target="ContentRoot.Foreground" Value=")" +
+                        hoverForeground + LR"("/>)";
+    }
+    return
+        LR"(<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button"><Grid><VisualStateManager.VisualStateGroups><VisualStateGroup x:Name="CommonStates"><VisualState x:Name="Normal"/><VisualState x:Name="PointerOver"><VisualState.Setters>)" +
+        hoverSetters +
+        LR"(</VisualState.Setters></VisualState><VisualState x:Name="Pressed"><VisualState.Setters>)" +
+        hoverSetters +
+        LR"(<Setter Target="ContentRoot.Opacity" Value="0.75"/></VisualState.Setters></VisualState><VisualState x:Name="Disabled"><VisualState.Setters><Setter Target="ContentRoot.Opacity" Value="0.45"/></VisualState.Setters></VisualState></VisualStateGroup><VisualStateGroup x:Name="FocusStates"><VisualState x:Name="Unfocused"/><VisualState x:Name="Focused"><VisualState.Setters><Setter Target="FocusOutline.Opacity" Value="1"/></VisualState.Setters></VisualState><VisualState x:Name="PointerFocused"/></VisualStateGroup></VisualStateManager.VisualStateGroups><Border x:Name="Header" CornerRadius=")" +
+        corner + LR"(" BorderBrush=")" + line +
+        LR"(" BorderThickness="0,0,0,1"><Border.Background>)" + normal +
+        LR"(</Border.Background><Grid><ContentPresenter x:Name="ContentRoot" Content="{TemplateBinding Content}" ContentTemplate="{TemplateBinding ContentTemplate}" HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="{TemplateBinding Padding}"/><Border x:Name="FocusOutline" CornerRadius=")" +
+        corner + LR"(" BorderThickness="1" BorderBrush=")" +
+        BetterPanelAppearanceHex(palette.accent) +
+        LR"(" Opacity="0" IsHitTestVisible="False"/></Grid></Border></Grid></ControlTemplate>)";
+}
+
+muxc::ControlTemplate BetterPanelAppearanceSectionTemplate(
+    BetterPanelAppearanceTheme theme,
+    BetterPanelAppearancePalette const& palette) {
+    return BetterPanelLoadControlTemplate(
+        BetterPanelAppearanceSectionTemplateXaml(theme, palette),
+        L"section");
 }
 
 // Details values are content that can be clicked to copy, not a column of
@@ -2746,21 +3159,24 @@ BetterPanelScrollChrome BetterPanelGetScrollChrome() {
     using Theme = BetterPanelAppearanceTheme;
     bool dark = g_settings.appearanceVariant ==
                 BetterPanelAppearanceVariant::Dark;
+    // Track, thumb and border colors from each system's scroll bar.
     switch (g_settings.appearanceTheme) {
-    case Theme::XP: return dark ? BetterPanelScrollChrome{0x13264B, 0x819CBD, 0xAEC2E2}
-                                : BetterPanelScrollChrome{0xE4E9ED, 0xBBC5CE, 0x6D7D91};
-    case Theme::Vista: return dark ? BetterPanelScrollChrome{0x0D1117, 0x495E6E, 0x729DB6}
-                                   : BetterPanelScrollChrome{0xE0EDF1, 0x9FC4CE, 0x5D9AAF};
-    case Theme::Win7: return dark ? BetterPanelScrollChrome{0x24394B, 0x63819B, 0x7EA6C5}
-                                  : BetterPanelScrollChrome{0xEBF2F7, 0xB8C9D8, 0x91AFC4};
-    case Theme::Win8: return dark ? BetterPanelScrollChrome{0x202226, 0x56616A, 0x56616A}
-                                  : BetterPanelScrollChrome{0xF1F1F1, 0xB6B6B6, 0xB6B6B6};
-    case Theme::Ubuntu: return dark ? BetterPanelScrollChrome{0x252525, 0x64615E, 0x77736F}
-                                    : BetterPanelScrollChrome{0xE9E8E6, 0xBEBAB5, 0x8E8A85};
-    case Theme::MacAqua: return dark ? BetterPanelScrollChrome{0x2D343B, 0x828D98, 0xA8B1BB}
-                                     : BetterPanelScrollChrome{0xE5E8EB, 0xBCC5CE, 0x9EA9B4};
-    case Theme::MacOS: return dark ? BetterPanelScrollChrome{0x242529, 0x777980, 0x777980}
-                                   : BetterPanelScrollChrome{0xF5F5F7, 0xB9BABF, 0xB9BABF};
+    case Theme::XP: return dark ? BetterPanelScrollChrome{0x1E1E1E, 0x4A4A4A, 0x0B0B0B}
+                                : BetterPanelScrollChrome{0xF3F1EC, 0xC6D6FC, 0x9DB9EB};
+    case Theme::Vista: return dark ? BetterPanelScrollChrome{0x101214, 0x3E464D, 0x5E6A73}
+                                   : BetterPanelScrollChrome{0xF0F0F0, 0xDCDCDC, 0x979797};
+    case Theme::Win7: return dark ? BetterPanelScrollChrome{0x1E2933, 0x4A5866, 0x6A7D90}
+                                  : BetterPanelScrollChrome{0xF0F0F0, 0xDCDCDC, 0x979797};
+    case Theme::Win8: return dark ? BetterPanelScrollChrome{0x1D1D1D, 0x5A5A5A, 0x5A5A5A}
+                                  : BetterPanelScrollChrome{0xF0F0F0, 0xCDCDCD, 0xCDCDCD};
+    case Theme::Win10: return dark ? BetterPanelScrollChrome{0x171717, 0x4D4D4D, 0x4D4D4D}
+                                   : BetterPanelScrollChrome{0xF0F0F0, 0xC2C2C2, 0xC2C2C2};
+    case Theme::Ubuntu: return dark ? BetterPanelScrollChrome{0x33322F, 0x6A6862, 0x252422}
+                                    : BetterPanelScrollChrome{0xE7E5E2, 0xB8B4AF, 0x9C9690};
+    case Theme::MacAqua: return dark ? BetterPanelScrollChrome{0x2D3035, 0x8A949F, 0x2B2F34}
+                                     : BetterPanelScrollChrome{0xEBEBEB, 0x5D97E0, 0x3D6AB0};
+    case Theme::MacOS: return dark ? BetterPanelScrollChrome{0x1E1E1E, 0x6E6E6E, 0x6E6E6E}
+                                   : BetterPanelScrollChrome{0xF5F5F5, 0xC1C1C1, 0xC1C1C1};
     default: return dark ? BetterPanelScrollChrome{0x292929, 0x737373, 0x737373}
                          : BetterPanelScrollChrome{0xEEEEEE, 0xB8B8B8, 0xB8B8B8};
     }
@@ -2855,6 +3271,66 @@ void BetterPanelStyleNativePaneText(BetterPanelState* state) {
     });
 }
 
+// Reads and writes Background on the element kinds that have one.
+mux::Media::Brush BetterPanelElementBackground(FrameworkElement const& element) {
+    if (auto panel = element.try_as<muxc::Panel>()) return panel.Background();
+    if (auto border = element.try_as<muxc::Border>()) return border.Background();
+    if (auto control = element.try_as<muxc::Control>()) {
+        return control.Background();
+    }
+    return nullptr;
+}
+
+void BetterPanelSetElementBackground(FrameworkElement const& element,
+                                     mux::Media::Brush const& brush) {
+    if (auto panel = element.try_as<muxc::Panel>()) {
+        panel.Background(brush);
+    } else if (auto border = element.try_as<muxc::Border>()) {
+        border.Background(brush);
+    } else if (auto control = element.try_as<muxc::Control>()) {
+        control.Background(brush);
+    }
+}
+
+void BetterPanelRestoreMaterialAncestors(BetterPanelState* state) {
+    for (auto& [weak, brush] : state->materialAncestors) {
+        if (auto element = weak.get()) {
+            try { BetterPanelSetElementBackground(element, brush); } catch (...) {}
+        }
+    }
+    state->materialAncestors.clear();
+}
+
+// A see-through panel only shows the window's material if every Explorer
+// layer between the Details pane and the window is transparent as well.
+void BetterPanelClearMaterialAncestors(BetterPanelState* state,
+                                       FrameworkElement const& root) {
+    BetterPanelRestoreMaterialAncestors(state);
+    auto transparent = mux::Media::SolidColorBrush(
+        winrt::Windows::UI::Colors::Transparent());
+    try {
+        for (auto current = winrt::Microsoft::UI::Xaml::Media::
+                 VisualTreeHelper::GetParent(root);
+             current; current = winrt::Microsoft::UI::Xaml::Media::
+                 VisualTreeHelper::GetParent(current)) {
+            auto element = current.try_as<FrameworkElement>();
+            if (!element) continue;
+            auto brush = BetterPanelElementBackground(element);
+            if (!brush) continue;
+            if (auto solid = brush.try_as<mux::Media::SolidColorBrush>();
+                solid && solid.Color().A == 0) {
+                continue;
+            }
+            state->materialAncestors.emplace_back(winrt::make_weak(element),
+                                                  brush);
+            BetterPanelSetElementBackground(element, transparent);
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Panel material ancestor update error %08X: %s", ex.code(),
+               ex.message().c_str());
+    }
+}
+
 void BetterPanelPrepareAppearanceState(BetterPanelState* state) {
     if (!state) return;
     if (state->appliedAppearanceTheme != g_settings.appearanceTheme ||
@@ -2873,14 +3349,40 @@ void BetterPanelPrepareAppearanceState(BetterPanelState* state) {
     state->customAppearance = palette.enabled;
     // Explorer's file area is one continuous canvas. Do not create a second
     // rectangular color field merely because Home contains several sections.
+    // XP is the exception: its task pane put lighter group cards on a
+    // lavender body, so the background and cards differ there.
     state->appearanceBackground = palette.enabled
-        ? BetterPanelAppearanceBrush(palette.surface) : nullptr;
-    bool macGlass = palette.enabled &&
+        ? BetterPanelAppearanceBrush(
+              g_settings.appearanceTheme == BetterPanelAppearanceTheme::XP
+                  ? palette.background : palette.surface)
+        : nullptr;
+    // Tahoe's inspector is one continuous surface; its sections have no cards.
+    bool macTahoe = palette.enabled &&
         g_settings.appearanceTheme == BetterPanelAppearanceTheme::MacOS;
-    state->appearanceSurface = macGlass
+    state->appearanceSurface = macTahoe
         ? BetterPanelAppearanceAlphaBrush(palette.surface, 0)
         : palette.enabled ? BetterPanelAppearanceBrush(palette.surface)
                           : nullptr;
+    // See-through materials replace the theme's background with a clear or
+    // lightly tinted one, so the Explorer window's material shows behind.
+    bool seeThrough = g_settings.material != BetterPanelMaterial::Theme;
+    mux::Media::Brush materialBrush{nullptr};
+    if (seeThrough) {
+        bool darkPane = g_settings.appearanceVariant ==
+                        BetterPanelAppearanceVariant::Dark;
+        if (!palette.enabled) {
+            if (auto root = state->detailsRootGrid.get()) {
+                darkPane = root.ActualTheme() == mux::ElementTheme::Dark;
+            }
+        }
+        uint32_t tint = palette.enabled ? palette.background
+                                        : (darkPane ? 0x202020 : 0xF3F3F3);
+        materialBrush = BetterPanelAppearanceAlphaBrush(
+            tint, g_settings.material == BetterPanelMaterial::Tinted ? 0x5C : 0);
+        state->appearanceBackground = materialBrush;
+        state->appearanceSurface = BetterPanelAppearanceAlphaBrush(0, 0);
+    }
+    state->appearanceMaterialBrush = materialBrush;
     state->appearanceButton = palette.enabled
         ? BetterPanelAppearanceButtonBrush(g_settings.appearanceTheme, palette)
         : nullptr;
@@ -2890,29 +3392,55 @@ void BetterPanelPrepareAppearanceState(BetterPanelState* state) {
         ? BetterPanelAppearanceBrush(palette.foreground) : nullptr;
     state->appearanceAccent = palette.enabled
         ? BetterPanelAppearanceBrush(palette.accent) : nullptr;
-    state->appearanceAccentForeground = palette.enabled
-        ? BetterPanelAppearanceBrush(
-              g_settings.appearanceTheme == BetterPanelAppearanceTheme::MacOS
-                  ? palette.foreground : 0xFFFFFF) : nullptr;
-    if (palette.enabled) {
+    {
+        // A checked toggle uses the theme's pressed face. Light Aero, Luna,
+        // Windows 8 and Windows 10 pressed faces are pale, so they keep the
+        // normal text color; saturated faces (orange, blue gel, accent) use
+        // white.
+        using Theme = BetterPanelAppearanceTheme;
         auto theme = g_settings.appearanceTheme;
         bool dark = g_settings.appearanceVariant ==
                     BetterPanelAppearanceVariant::Dark;
-        uint32_t color = theme == BetterPanelAppearanceTheme::XP
-            ? (dark ? 0xB8D8FF : 0x144F9C)
-            : theme == BetterPanelAppearanceTheme::Ubuntu
-                ? (dark ? 0xF07746 : 0x4C4C4C)
-                : (theme == BetterPanelAppearanceTheme::MacOS ||
-                   theme == BetterPanelAppearanceTheme::MacAqua)
-                    ? (dark ? 0xE9EAED : 0x383C42)
-                    : (dark ? 0xB9E3FF : 0x174D79);
+        bool whiteOnChecked = theme == Theme::Ubuntu ||
+            theme == Theme::MacAqua || theme == Theme::MacOS ||
+            theme == Theme::OLED ||
+            theme == Theme::Slate ||
+            (dark && (theme == Theme::Win8 || theme == Theme::Win10));
+        state->appearanceAccentForeground = palette.enabled
+            ? BetterPanelAppearanceBrush(whiteOnChecked ? 0xFFFFFF
+                                                        : palette.foreground)
+            : nullptr;
+    }
+    if (palette.enabled) {
+        using Theme = BetterPanelAppearanceTheme;
+        auto theme = g_settings.appearanceTheme;
+        bool dark = g_settings.appearanceVariant ==
+                    BetterPanelAppearanceVariant::Dark;
+        // Each system's own heading color: XP task-pane group titles, the
+        // Vista and Windows 7 main-instruction blues, Windows 8 ribbon blue,
+        // Ambiance's dark grey, and the Mac sidebar's muted headings.
+        uint32_t color = dark ? 0xB9E3FF : 0x174D79;
+        switch (theme) {
+        case Theme::XP: color = dark ? 0xF7941D : 0x215DC6; break;
+        case Theme::Vista: color = dark ? 0x9CCCF0 : 0x003399; break;
+        case Theme::Win7: color = dark ? 0xA9D3F5 : 0x1E3287; break;
+        case Theme::Win8: color = dark ? 0x63B0F2 : 0x19478A; break;
+        case Theme::Win10: color = dark ? 0xFFFFFF : 0x000000; break;
+        case Theme::Ubuntu: color = dark ? 0xF07746 : 0x3C3B37; break;
+        case Theme::MacAqua: color = dark ? 0xA9B4C1 : 0x6F7D8C; break;
+        case Theme::MacOS: color = dark ? 0x9A9A9A : 0x808080; break;
+        default: break;
+        }
         state->appearanceHeading = BetterPanelAppearanceBrush(color);
-        bool headerUsesWhite = theme == BetterPanelAppearanceTheme::XP ||
-            theme == BetterPanelAppearanceTheme::Vista ||
-            theme == BetterPanelAppearanceTheme::Ubuntu ||
-            (dark && theme == BetterPanelAppearanceTheme::MacAqua);
-        state->appearanceHeaderForeground = BetterPanelAppearanceBrush(
-            headerUsesWhite ? 0xFFFFFF : palette.foreground);
+        uint32_t headerColor = palette.foreground;
+        if (theme == Theme::XP || theme == Theme::Vista ||
+            (dark && theme == Theme::MacAqua)) {
+            headerColor = 0xFFFFFF;
+        } else if (theme == Theme::Ubuntu) {
+            headerColor = 0xDFDBD2;  // Ambiance title-bar text
+        }
+        state->appearanceHeaderForeground =
+            BetterPanelAppearanceBrush(headerColor);
     } else {
         state->appearanceHeading = nullptr;
         state->appearanceHeaderForeground = nullptr;
@@ -2950,6 +3478,10 @@ void BetterPanelPrepareAppearanceState(BetterPanelState* state) {
     state->appearanceRowTemplate = palette.enabled
         ? BetterPanelAppearanceRowTemplate(g_settings.appearanceTheme, palette)
         : nullptr;
+    state->appearanceSectionTemplate = palette.enabled
+        ? BetterPanelAppearanceSectionTemplate(g_settings.appearanceTheme,
+                                               palette)
+        : nullptr;
     state->appearanceContentActionTemplate = palette.enabled &&
         g_settings.appearanceTheme == BetterPanelAppearanceTheme::MacOS
         ? BetterPanelMacOSContentActionTemplate(
@@ -2963,51 +3495,53 @@ void BetterPanelPrepareAppearanceState(BetterPanelState* state) {
         header.Background(state->nativeAppearanceHeaderBackground);
     }
     if (auto root = state->detailsRootGrid.get()) {
-        if (macGlass) {
-            try {
-                root.Background(winrt::make<BetterPanelBackdropBlurBrush>(
-                    root, 24.0f,
-                    g_settings.appearanceVariant ==
-                        BetterPanelAppearanceVariant::Dark));
-            } catch (winrt::hresult_error const& ex) {
-                Wh_Log(L"macOS pane blur unavailable %08X: %s", ex.code(),
-                       ex.message().c_str());
-                root.Background(state->appearanceBackground);
-            }
+        if (seeThrough) {
+            root.Background(materialBrush);
+            BetterPanelClearMaterialAncestors(state, root);
         } else {
+            BetterPanelRestoreMaterialAncestors(state);
             root.Background(palette.enabled ? state->appearanceBackground
                                             : state->nativeDetailsRootBackground);
         }
     }
     BetterPanelStyleNativePaneText(state);
     if (auto host = state->backgroundHost.get()) {
-        host.Background(macGlass
-            ? BetterPanelAppearanceAlphaBrush(
-                  g_settings.appearanceVariant ==
-                          BetterPanelAppearanceVariant::Dark
-                      ? 0x282C34 : 0xF5F7FA,
-                  g_settings.appearanceVariant ==
-                          BetterPanelAppearanceVariant::Dark
-                      ? 0x8C : 0xAD)
-            : palette.enabled ? state->appearanceBackground
-              : mux::Media::SolidColorBrush(
-                    winrt::Windows::UI::Colors::Transparent()));
+        // The root already carries the background; a second fill on the
+        // host would only darken a see-through or tinted panel.
+        host.Background(palette.enabled && !seeThrough
+            ? state->appearanceBackground
+            : mux::Media::SolidColorBrush(
+                  winrt::Windows::UI::Colors::Transparent()));
     }
     if (auto panel = state->panel.get().try_as<muxc::StackPanel>()) {
         panel.Margin(Thickness{margin, 12, margin, 0});
         panel.Spacing(spacing);
     }
     if (auto root = state->detachedRoot.get()) {
-        root.Background(palette.enabled ? state->appearanceBackground
-                                        : state->nativeDetachedBackground);
+        // The pop-out is its own window without Explorer's material behind
+        // it, so it keeps the theme's solid background.
+        root.Background(palette.enabled
+                            ? BetterPanelAppearanceBrush(palette.background)
+                            : state->nativeDetachedBackground);
     }
-    auto updateCard = [&](winrt::weak_ref<FrameworkElement> const& weakCard) {
+    auto updateCard = [&](BetterPanelElementRef const& weakCard) {
         if (auto element = weakCard.get()) {
             if (auto card = element.try_as<muxc::Border>()) {
                 card.Background(state->appearanceSurface);
                 card.BorderBrush(nullptr);
                 card.BorderThickness(Thickness{0});
                 card.CornerRadius(CornerRadius{palette.enabled ? 0.0 : 8.0});
+                // XP task-pane groups: a light body with a white rim and
+                // slightly rounded corners under the group header bar.
+                if (palette.enabled && g_settings.appearanceTheme ==
+                                           BetterPanelAppearanceTheme::XP) {
+                    card.BorderBrush(BetterPanelAppearanceBrush(
+                        g_settings.appearanceVariant ==
+                                BetterPanelAppearanceVariant::Dark
+                            ? 0x0B0B0B : 0xFFFFFF));
+                    card.BorderThickness(Thickness{1, 1, 1, 1});
+                    card.CornerRadius(CornerRadius{3, 3, 3, 3});
+                }
             }
         }
     };
@@ -3021,6 +3555,10 @@ void BetterPanelPrepareAppearanceState(BetterPanelState* state) {
         home.BorderBrush(nullptr);
         home.BorderThickness(Thickness{0});
         home.CornerRadius(CornerRadius{0});
+        if (palette.enabled &&
+            g_settings.appearanceTheme == BetterPanelAppearanceTheme::XP) {
+            home.Background(nullptr);  // sit on the task-pane body
+        }
         home.Padding(Thickness{metrics.homePadding, 8,
                                metrics.homePadding, metrics.homePadding});
     }
@@ -3039,6 +3577,7 @@ void BetterPanelApplyNativeButtonStyle(
     std::shared_ptr<BetterPanelState> const& state,
     DependencyObject const& root) {
     if (!state || !root) return;
+    bool skipChildren = false;
 
     if (state->customAppearance || !state->themedTextSnapshots.empty()) {
         if (auto text = root.try_as<muxc::TextBlock>()) {
@@ -3089,8 +3628,31 @@ void BetterPanelApplyNativeButtonStyle(
             }
         }
     }
+    // Windows 8 and 10 drew their glyphs with Segoe MDL2 Assets, which is
+    // thinner and squarer than Windows 11's Segoe Fluent Icons. The glyph
+    // code points used here exist in both fonts.
+    if (auto icon = root.try_as<muxc::FontIcon>()) {
+        auto theme = g_settings.appearanceTheme;
+        if (state->customAppearance &&
+            (theme == BetterPanelAppearanceTheme::Win8 ||
+             theme == BetterPanelAppearanceTheme::Win10)) {
+            icon.FontFamily(mux::Media::FontFamily(L"Segoe MDL2 Assets"));
+        } else {
+            icon.ClearValue(muxc::FontIcon::FontFamilyProperty());
+        }
+    }
     if (auto buttonBase = root.try_as<muxp::ButtonBase>()) {
         BetterPanelInstallAnimationHandlers(state, buttonBase);
+        // Text a button builds itself (a plain string Content, including
+        // labels swapped in later such as "Details ▸") inherits the
+        // button's font, so give the button the theme font too.
+        if (auto control = buttonBase.try_as<muxc::Control>()) {
+            if (state->customAppearance && state->appearanceFontFamily) {
+                control.FontFamily(state->appearanceFontFamily);
+            } else {
+                control.ClearValue(muxc::Control::FontFamilyProperty());
+            }
+        }
     }
 
     if (auto button = root.try_as<muxc::Button>()) {
@@ -3214,8 +3776,12 @@ void BetterPanelApplyNativeButtonStyle(
         } else if (!state->customAppearance) {
             button.CornerRadius(snapshot.cornerRadius);
         }
+        bool sectionHeader = state->customAppearance && sectionToggle &&
+                             state->appearanceSectionTemplate;
         auto targetTemplate = state->customAppearance
-            ? (contentAction && state->appearanceContentActionTemplate
+            ? (sectionHeader
+                   ? state->appearanceSectionTemplate
+                   : contentAction && state->appearanceContentActionTemplate
                    ? state->appearanceContentActionTemplate
                    : listRow ? state->appearanceRowTemplate
                        : state->appearanceButtonTemplate)
@@ -3223,6 +3789,15 @@ void BetterPanelApplyNativeButtonStyle(
         if (!targetTemplate) targetTemplate = snapshot.controlTemplate;
         if (button.Template() != targetTemplate) {
             button.Template(targetTemplate);
+        }
+        if (sectionHeader) {
+            // Section headers read as headings, in the system's heading
+            // color, rather than as push buttons.
+            button.Foreground(state->appearanceHeading);
+            button.Background(nullptr);
+            button.BorderBrush(nullptr);
+            button.BorderThickness(Thickness{0});
+            skipChildren = true;
         }
         if (state->customAppearance && listRow) {
             auto theme = g_settings.appearanceTheme;
@@ -3357,6 +3932,9 @@ void BetterPanelApplyNativeButtonStyle(
         }
     }
 
+    // A themed section header's label must keep the heading color it
+    // inherits from the button, so don't restyle the text inside it.
+    if (skipChildren) return;
     int childCount = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
         GetChildrenCount(root);
     for (int index = 0; index < childCount; index++) {
@@ -3783,7 +4361,6 @@ IShellBrowser* BetterPanelGetShellBrowser(HWND window) {
     if (!window) {
         return nullptr;
     }
-
     DWORD processId = 0;
     GetWindowThreadProcessId(window, &processId);
     if (processId != GetCurrentProcessId()) {
@@ -4124,6 +4701,36 @@ struct BetterPanelTransferContext {
     std::wstring destination;
 };
 
+// While a Workspace box's panel refreshes, the "active selection" and
+// "active folder" questions are answered from what the box keeps, never from
+// Explorer, so nothing in the panel follows Explorer unless the box does.
+struct BetterPanelBoxView {
+    bool active = false;
+    std::vector<std::wstring> paths;
+    std::wstring folder;
+    bool home = false;
+};
+thread_local BetterPanelBoxView g_betterBoxView;
+
+class BetterPanelBoxViewScope {
+   public:
+    BetterPanelBoxViewScope(bool enable, std::vector<std::wstring> const& paths,
+                            std::wstring const& folder, bool home)
+        : previous_(g_betterBoxView) {
+        if (!enable) return;
+        g_betterBoxView.active = true;
+        g_betterBoxView.paths = paths;
+        g_betterBoxView.folder = folder;
+        g_betterBoxView.home = home || (paths.empty() && folder.empty());
+    }
+    ~BetterPanelBoxViewScope() { g_betterBoxView = std::move(previous_); }
+    BetterPanelBoxViewScope(BetterPanelBoxViewScope const&) = delete;
+    BetterPanelBoxViewScope& operator=(BetterPanelBoxViewScope const&) = delete;
+
+   private:
+    BetterPanelBoxView previous_;
+};
+
 BetterPanelTransferContext BetterPanelResolveTransferContext(
     std::wstring_view preferredSource,
     std::vector<std::wstring> const& fallbackSources) {
@@ -4133,6 +4740,8 @@ BetterPanelTransferContext BetterPanelResolveTransferContext(
         std::vector<std::wstring> selection;
     };
     BetterPanelTransferContext context;
+    // A Workspace box isn't an Explorer tab; cross-tab moves don't apply.
+    if (g_betterBoxView.active) return context;
     HWND activeTab = BetterPanelGetFocusedTabWindow();
     HWND root = activeTab ? GetAncestor(activeTab, GA_ROOT)
                           : g_betterQueryExplorerWindow;
@@ -4226,6 +4835,7 @@ struct BetterPanelFolderCache {
 thread_local BetterPanelSelectionCache g_betterSelectionCache;
 thread_local BetterPanelFolderCache g_betterFolderCache;
 
+
 void BetterPanelInvalidateExplorerQueryCaches() {
     g_betterSelectionCache.tick = 0;
     g_betterFolderCache.tick = 0;
@@ -4233,6 +4843,7 @@ void BetterPanelInvalidateExplorerQueryCaches() {
 
 std::vector<std::wstring> BetterPanelGetActiveSelectionPaths(
     bool allowShortCache = true) {
+    if (g_betterBoxView.active) return g_betterBoxView.paths;
     auto& cache = g_betterSelectionCache;
     HWND activeTab = BetterPanelGetFocusedTabWindow();
     if (!activeTab) {
@@ -4490,6 +5101,7 @@ std::wstring BetterPanelFormatByteSize(uint64_t size) {
 }
 
 std::wstring BetterPanelGetActiveFolderPath() {
+    if (g_betterBoxView.active) return g_betterBoxView.folder;
     auto& cache = g_betterFolderCache;
     HWND activeTab = BetterPanelGetFocusedTabWindow();
     if (!activeTab) return {};
@@ -6282,7 +6894,7 @@ std::wstring BetterPanelContainingFolder(std::wstring const& path) {
 
 HRESULT BetterPanelMoveItemsToFolder(
     std::vector<std::wstring> const& sources,
-    std::wstring const& destination, HWND owner) {
+    std::wstring const& destination, HWND owner, bool copy = false) {
     if (sources.empty() || destination.empty()) {
         return E_INVALIDARG;
     }
@@ -6311,8 +6923,10 @@ HRESULT BetterPanelMoveItemsToFolder(
         if (FAILED(result)) {
             return result;
         }
-        result = operation->MoveItem(sourceItem.get(), destinationItem.get(),
-                                     nullptr, nullptr);
+        result = copy ? operation->CopyItem(sourceItem.get(), destinationItem.get(),
+                                            nullptr, nullptr)
+                      : operation->MoveItem(sourceItem.get(), destinationItem.get(),
+                                            nullptr, nullptr);
         if (FAILED(result)) {
             return result;
         }
@@ -7063,6 +7677,16 @@ void BetterPanelStopTextHandler(BetterPanelState* state) {
     state->textHandlerPath.clear();
 }
 
+// The window that preview-handler surfaces (rendered HTML, Markdown, SVG and
+// other registered previewers) are created in.
+HWND BetterPanelPreviewParentWindow(BetterPanelState* state) {
+    if (!state) return nullptr;
+    if (state->previewParentWindow && IsWindow(state->previewParentWindow)) {
+        return state->previewParentWindow;
+    }
+    return state->detached ? state->detachedWindow : state->explorerWindow;
+}
+
 std::optional<RECT> BetterPanelTextHandlerClientRect(
     BetterPanelState* state, FrameworkElement const& element) {
     if (!state || !element || !element.XamlRoot() ||
@@ -7074,7 +7698,7 @@ std::optional<RECT> BetterPanelTextHandlerClientRect(
     auto rootWithConverter = root.try_as<winrt::Microsoft::UI::Xaml::IXamlRoot3>();
     if (!rootElement || !rootWithConverter) return {};
     auto converter = rootWithConverter.CoordinateConverter();
-    HWND parent = state->detached ? state->detachedWindow : state->explorerWindow;
+    HWND parent = BetterPanelPreviewParentWindow(state);
     if (!converter || !parent || !IsWindow(parent)) return {};
     auto transform = element.TransformToVisual(rootElement);
     auto position = transform.TransformPoint({0, 0});
@@ -7094,7 +7718,7 @@ std::optional<RECT> BetterPanelTextHandlerClientRect(
 void BetterPanelPositionTextHandler(BetterPanelState* state) try {
     if (!state || !state->textHandlerWindow || !state->textHandler) return;
     auto placeholder = state->textHandlerPlaceholder.get();
-    HWND parent = state->detached ? state->detachedWindow : state->explorerWindow;
+    HWND parent = BetterPanelPreviewParentWindow(state);
     if (!placeholder || !parent || !IsWindow(parent) || state->previewsCollapsed ||
         (state->textCard.get() &&
          state->textCard.get().Visibility() != Visibility::Visible) ||
@@ -7118,7 +7742,17 @@ void BetterPanelPositionTextHandler(BetterPanelState* state) try {
     }
     RECT visible{};
     IntersectRect(&visible, &*rect, &client);
-    if (!state->detached) {
+    if (state->previewClipWindow && IsWindow(state->previewClipWindow)) {
+        // A Workspace box: keep the surface inside the box as it scrolls.
+        RECT box{};
+        GetWindowRect(state->previewClipWindow, &box);
+        MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&box), 2);
+        RECT clipped{};
+        if (IsWindowVisible(state->previewClipWindow)) {
+            IntersectRect(&clipped, &visible, &box);
+        }
+        visible = clipped;
+    } else if (!state->detached) {
         if (auto pane = state->explorerDetailsPane.get()) {
             if (auto paneRect = BetterPanelTextHandlerClientRect(state, pane)) {
                 RECT clipped{};
@@ -7131,11 +7765,28 @@ void BetterPanelPositionTextHandler(BetterPanelState* state) try {
         ShowWindow(state->textHandlerWindow, SW_HIDE);
         return;
     }
+    // Layout passes happen often (the panel's refresh tick, the Workspace's
+    // follow tick). Re-applying an unchanged place resizes the previewer,
+    // which makes some of them (Markdown) jump back to the top, so scrolling
+    // never sticks. Only move it when its place changes, and only raise it
+    // when something got above it.
+    bool shown = IsWindowVisible(state->textHandlerWindow) != FALSE;
+    bool samePlace = shown && EqualRect(&state->textHandlerPlaced, &*rect) &&
+                     EqualRect(&state->textHandlerVisible, &visible);
+    if (samePlace) {
+        if (GetWindow(state->textHandlerWindow, GW_HWNDPREV)) {
+            SetWindowPos(state->textHandlerWindow, HWND_TOP, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        return;
+    }
+    state->textHandlerPlaced = *rect;
+    state->textHandlerVisible = visible;
     HRGN clip = CreateRectRgn(visible.left - rect->left,
                               visible.top - rect->top,
                               visible.right - rect->left,
                               visible.bottom - rect->top);
-    if (clip && !SetWindowRgn(state->textHandlerWindow, clip, FALSE))
+    if (clip && !SetWindowRgn(state->textHandlerWindow, clip, TRUE))
         DeleteObject(clip);
     SetWindowPos(state->textHandlerWindow, HWND_TOP, rect->left, rect->top,
                  width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
@@ -7201,7 +7852,7 @@ std::wstring BetterPanelStartTextHandler(BetterPanelState* state) {
         return L"This preview handler cannot open files here";
     }
     if (FAILED(hr)) return L"The preview handler could not read this file";
-    HWND parent = state->detached ? state->detachedWindow : state->explorerWindow;
+    HWND parent = BetterPanelPreviewParentWindow(state);
     if (!parent || !IsWindow(parent)) return L"Preview pane window is unavailable";
     HWND window = CreateWindowExW(0, L"STATIC", L"Better Panel handler preview",
         WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
@@ -7674,6 +8325,35 @@ winrt::fire_and_forget BetterPanelLoadFolderPreview(
     } catch (winrt::hresult_error const& ex) {
         Wh_Log(L"Folder preview error %08X: %s", ex.code(),
                ex.message().c_str());
+    }
+}
+
+// A Workspace box has no Explorer thumbnail control filling its preview, so
+// the box loads the file's large Shell thumbnail into its preview image
+// itself (photos, videos, documents and anything with a thumbnail handler).
+winrt::fire_and_forget BetterPanelLoadBoxFilePreview(
+    std::weak_ptr<BetterPanelState> weakState,
+    std::wstring path) {
+    BetterPanelAsyncLifetime asyncLifetime;
+    if (BetterPanelWorkerStopping()) co_return;
+    try {
+        auto file = co_await ws::StorageFile::GetFileFromPathAsync(path);
+        auto thumbnail = co_await file.GetThumbnailAsync(
+            wsf::ThumbnailMode::SingleItem, 512,
+            wsf::ThumbnailOptions::ResizeThumbnail);
+        if (!thumbnail) co_return;
+        winrt::Microsoft::UI::Xaml::Media::Imaging::BitmapImage bitmap;
+        co_await bitmap.SetSourceAsync(thumbnail);
+        auto state = weakState.lock();
+        if (!state || state->unloaded || state->selectedPath != path) {
+            co_return;
+        }
+        if (auto preview = state->nativePreviewImage.get()) {
+            preview.Source(bitmap);
+            preview.Visibility(Visibility::Visible);
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Box preview error %08X: %s", ex.code(), ex.message().c_str());
     }
 }
 
@@ -8795,7 +9475,23 @@ void BetterPanelUpdateDetachButton(BetterPanelState* state) {
                 317, tint);
         }
     }
-    if (auto button = state->detachButton.get()) {
+    if (auto button = state->workspaceButton.get()) {
+        button.Visibility(state->detached && !state->workspaceBox
+                              ? Visibility::Visible
+                              : Visibility::Collapsed);
+    }
+    for (auto const& weak : {state->toWorkspaceButton, state->toWorkspaceMultiButton}) {
+        if (auto button = weak.get()) {
+            button.Visibility(g_settings.experimentalPopout && !state->workspaceBox
+                                  ? Visibility::Visible
+                                  : Visibility::Collapsed);
+        }
+    }
+    if (auto button = state->detachButton.get();
+        button && state->workspaceBox) {
+        // A panel inside a Workspace box has no window of its own to pin.
+        button.Visibility(Visibility::Collapsed);
+    } else if (button) {
         button.Visibility(g_settings.experimentalPopout || state->detached
                               ? Visibility::Visible
                               : Visibility::Collapsed);
@@ -8835,9 +9531,2993 @@ void BetterPanelRequestNativePaneVisibility(BetterPanelState* state,
                                             bool visible);
 void BetterPanelRefreshDetachedState(BetterPanelState* state);
 
+////////////////////////////////////////////////////////////////////////////////
+// Pop-out window placement: attached beside Explorer, docked to a screen
+// edge, or free floating, plus Always on top.
+
+constexpr UINT kBetterPanelMenuTopmost = 0x1F10;
+constexpr UINT kBetterPanelMenuAttachRight = 0x1F20;
+constexpr UINT kBetterPanelMenuAttachLeft = 0x1F30;
+constexpr UINT kBetterPanelMenuScreenRight = 0x1F40;
+constexpr UINT kBetterPanelMenuScreenLeft = 0x1F50;
+constexpr UINT kBetterPanelMenuFree = 0x1F60;
+constexpr UINT kBetterPanelMenuScreenTop = 0x1F90;
+constexpr UINT kBetterPanelMenuScreenBottom = 0x1FA0;
+constexpr UINT kBetterPanelMenuCornerTopLeft = 0x1FB0;
+constexpr UINT kBetterPanelMenuCornerTopRight = 0x1FC0;
+constexpr UINT kBetterPanelMenuCornerBottomLeft = 0x1FD0;
+constexpr UINT kBetterPanelMenuCornerBottomRight = 0x1FE0;
+
+// The title-bar menu's placement choices, in menu order (Float last).
+struct BetterPanelPlacementMenuItem {
+    UINT command;
+    BetterPanelWindowAttach attach;
+    PCWSTR label;
+};
+constexpr BetterPanelPlacementMenuItem kBetterPanelPlacementMenu[] = {
+    {kBetterPanelMenuAttachRight, BetterPanelWindowAttach::Right,
+     L"Attach to Explorer (right)"},
+    {kBetterPanelMenuAttachLeft, BetterPanelWindowAttach::Left,
+     L"Attach to Explorer (left)"},
+    {kBetterPanelMenuScreenRight, BetterPanelWindowAttach::ScreenRight,
+     L"Dock to screen edge (right)"},
+    {kBetterPanelMenuScreenLeft, BetterPanelWindowAttach::ScreenLeft,
+     L"Dock to screen edge (left)"},
+    {kBetterPanelMenuScreenTop, BetterPanelWindowAttach::ScreenTop,
+     L"Dock to screen edge (top)"},
+    {kBetterPanelMenuScreenBottom, BetterPanelWindowAttach::ScreenBottom,
+     L"Dock to screen edge (bottom)"},
+    {kBetterPanelMenuCornerTopLeft, BetterPanelWindowAttach::CornerTopLeft,
+     L"Screen corner (top left)"},
+    {kBetterPanelMenuCornerTopRight, BetterPanelWindowAttach::CornerTopRight,
+     L"Screen corner (top right)"},
+    {kBetterPanelMenuCornerBottomLeft, BetterPanelWindowAttach::CornerBottomLeft,
+     L"Screen corner (bottom left)"},
+    {kBetterPanelMenuCornerBottomRight, BetterPanelWindowAttach::CornerBottomRight,
+     L"Screen corner (bottom right)"},
+    {kBetterPanelMenuFree, BetterPanelWindowAttach::Free, L"Float freely"},
+};
+
+// The Explorer window the pop-out is linked to: the one it came from unless
+// the user linked another. Null while the linked window is closed.
+HWND BetterPanelLinkedExplorer(BetterPanelState* state) {
+    if (!state) return nullptr;
+    HWND window = state->linkedWindow ? state->linkedWindow
+                                      : state->explorerWindow;
+    return window && IsWindow(window) ? window : nullptr;
+}
+
+// A window's visible bounds, without Windows 11's invisible resize borders.
+RECT BetterPanelVisibleFrame(HWND window) {
+    RECT rect{};
+    if (FAILED(DwmGetWindowAttribute(window, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                     &rect, sizeof(rect)))) {
+        GetWindowRect(window, &rect);
+    }
+    return rect;
+}
+
+// Moves and sizes |window| so that its visible frame becomes |frame|.
+void BetterPanelPlaceVisibleFrame(HWND window, RECT const& frame) {
+    RECT outer{};
+    GetWindowRect(window, &outer);
+    RECT visible = BetterPanelVisibleFrame(window);
+    int left = visible.left - outer.left;
+    int top = visible.top - outer.top;
+    int right = outer.right - visible.right;
+    int bottom = outer.bottom - visible.bottom;
+    int width = frame.right - frame.left + left + right;
+    int height = frame.bottom - frame.top + top + bottom;
+    // Following a moving Explorer only changes the position; skipping the
+    // resize keeps the XAML content from re-laying out on every step.
+    UINT flags = SWP_NOZORDER | SWP_NOACTIVATE;
+    if (width == outer.right - outer.left && height == outer.bottom - outer.top) {
+        flags |= SWP_NOSIZE;
+    }
+    SetWindowPos(window, nullptr, frame.left - left, frame.top - top, width,
+                 height, flags);
+}
+
+RECT BetterPanelWorkArea(HWND window) {
+    MONITORINFO info{sizeof(info)};
+    if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                        &info)) {
+        return info.rcWork;
+    }
+    RECT rect{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &rect, 0);
+    return rect;
+}
+
+// The monitor's work area minus the "Screen edge spacing" setting: where a
+// pop-out docked to a screen edge or corner sits.
+RECT BetterPanelScreenDockArea(HWND window) {
+    RECT work = BetterPanelWorkArea(window);
+    int gap = MulDiv(g_settings.windowSnapGap, GetDpiForWindow(window), 96);
+    InflateRect(&work, -gap, -gap);
+    return work;
+}
+
+bool BetterPanelAttachedToExplorer(BetterPanelState* state) {
+    // Shrunk to its floating button, the pop-out takes no room beside
+    // Explorer.
+    return state && state->detached && !state->widgetWindow &&
+           (state->detachedAttach == BetterPanelWindowAttach::Right ||
+            state->detachedAttach == BetterPanelWindowAttach::Left);
+}
+
+// The pop-out's visible width, used to make room for it in Explorer.
+int BetterPanelDetachedVisibleWidth(BetterPanelState* state) {
+    if (!state || !state->detachedWindow) return 0;
+    RECT frame = BetterPanelVisibleFrame(state->detachedWindow);
+    return std::max(0, static_cast<int>(frame.right - frame.left));
+}
+
+// Narrows Explorer on the attached side when the pop-out doesn't fit beside
+// it. A maximized Explorer keeps its maximized state and fills the screen
+// minus the panel (WM_GETMINMAXINFO below keeps that on re-maximize).
+void BetterPanelMakeRoomInExplorer(BetterPanelState* state) {
+    if (!g_settings.windowMakeRoom || !BetterPanelAttachedToExplorer(state) ||
+        state->explorerMoving) {
+        return;
+    }
+    HWND explorer = BetterPanelLinkedExplorer(state);
+    if (!explorer || !IsWindow(explorer) || IsIconic(explorer)) return;
+    bool right = state->detachedAttach == BetterPanelWindowAttach::Right;
+    int width = BetterPanelDetachedVisibleWidth(state);
+    if (width <= 0) return;
+    RECT work = BetterPanelWorkArea(explorer);
+    if (IsZoomed(explorer)) {
+        RECT outer{};
+        GetWindowRect(explorer, &outer);
+        // A maximized window's frame hangs past the work area by its border.
+        int border = std::max(0, static_cast<int>(work.left - outer.left));
+        RECT target = outer;
+        if (right) {
+            target.right = work.right - width + border;
+        } else {
+            target.left = work.left + width - border;
+        }
+        if (!EqualRect(&target, &outer)) {
+            SetWindowPos(explorer, nullptr, target.left, target.top,
+                         target.right - target.left, target.bottom - target.top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        return;
+    }
+    RECT owner = BetterPanelVisibleFrame(explorer);
+    RECT target = owner;
+    int minimum = MulDiv(480, GetDpiForWindow(explorer), 96);
+    if (right && owner.right + width > work.right) {
+        target.right = work.right - width;
+        if (target.right - target.left < minimum) {
+            target.left = std::max(static_cast<int>(work.left),
+                                   static_cast<int>(target.right) - minimum);
+        }
+    } else if (!right && owner.left - width < work.left) {
+        target.left = work.left + width;
+        if (target.right - target.left < minimum) {
+            target.right = std::min(static_cast<int>(work.right),
+                                    static_cast<int>(target.left) + minimum);
+        }
+    } else {
+        return;
+    }
+    int lost = (owner.right - owner.left) - (target.right - target.left);
+    if (lost <= 0) return;
+    if (state->explorerShrunk && state->explorerShrunkSide != state->detachedAttach) {
+        state->explorerShrunk = 0;
+    }
+    state->explorerShrunk += lost;
+    state->explorerShrunkSide = state->detachedAttach;
+    BetterPanelPlaceVisibleFrame(explorer, target);
+}
+
+// Gives Explorer back the space it gave up for the pop-out.
+void BetterPanelRestoreExplorerRoom(BetterPanelState* state) {
+    if (!state) return;
+    HWND explorer = BetterPanelLinkedExplorer(state);
+    int shrunk = state->explorerShrunk;
+    auto side = state->explorerShrunkSide;
+    int natural = state->explorerNaturalWidth;
+    if (natural > 0) side = state->detachedAttach;
+    state->explorerShrunk = 0;
+    state->explorerNaturalWidth = 0;
+    if (!explorer || !IsWindow(explorer) || IsIconic(explorer)) return;
+    if (natural > 0 && !IsZoomed(explorer)) {
+        // Squashed against the panel: return to the width it had before.
+        RECT owner = BetterPanelVisibleFrame(explorer);
+        shrunk = std::max(shrunk, natural - static_cast<int>(owner.right - owner.left));
+    }
+    bool previous = state->detachedPositioning;
+    state->detachedPositioning = true;
+    if (IsZoomed(explorer)) {
+        // Fill the whole work area again, frame overhang included.
+        RECT work = BetterPanelWorkArea(explorer);
+        RECT outer{};
+        GetWindowRect(explorer, &outer);
+        int border = std::max(0, static_cast<int>(outer.bottom - work.bottom));
+        SetWindowPos(explorer, nullptr, work.left - border, outer.top,
+                     (work.right - work.left) + border * 2,
+                     outer.bottom - outer.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    } else if (shrunk > 0) {
+        RECT work = BetterPanelWorkArea(explorer);
+        RECT owner = BetterPanelVisibleFrame(explorer);
+        if (side == BetterPanelWindowAttach::Right) {
+            owner.right = std::min(static_cast<int>(work.right),
+                                   static_cast<int>(owner.right) + shrunk);
+        } else {
+            owner.left = std::max(static_cast<int>(work.left),
+                                  static_cast<int>(owner.left) - shrunk);
+        }
+        BetterPanelPlaceVisibleFrame(explorer, owner);
+    }
+    state->detachedPositioning = previous;
+}
+
+void BetterPanelPositionDetachedWindow(BetterPanelState* state) {
+    if (!state || !state->detached || state->detachedPositioning) return;
+    if (BetterPanelAttachedToExplorer(state)) {
+        // Narrowing Explorer re-enters through its WM_WINDOWPOSCHANGED;
+        // the guard keeps that from repositioning halfway.
+        state->detachedPositioning = true;
+        BetterPanelMakeRoomInExplorer(state);
+        state->detachedPositioning = false;
+    }
+    HWND window = state->detachedWindow;
+    if (!window || !IsWindow(window) || IsIconic(window) ||
+        IsZoomed(window)) {
+        return;
+    }
+    using Attach = BetterPanelWindowAttach;
+    RECT current = BetterPanelVisibleFrame(window);
+    // Start from the user's own size, not whatever the last dock stretched
+    // the window to; each dock then stretches only the side it fills.
+    if (state->detachedSize.cx <= 0 || state->detachedSize.cy <= 0) {
+        state->detachedSize = {current.right - current.left,
+                               current.bottom - current.top};
+    }
+    int width = state->detachedSize.cx;
+    int height = state->detachedSize.cy;
+    RECT target = current;
+    switch (state->detachedAttach) {
+        case Attach::Right:
+        case Attach::Left: {
+            HWND explorer = BetterPanelLinkedExplorer(state);
+            if (!explorer || !IsWindow(explorer) || IsIconic(explorer)) return;
+            RECT owner = BetterPanelVisibleFrame(explorer);
+            RECT work = BetterPanelWorkArea(explorer);
+            target.top = owner.top;
+            target.bottom = g_settings.windowMatchHeight ? owner.bottom
+                                                         : owner.top + height;
+            int x = state->detachedAttach == Attach::Right ? owner.right
+                                                           : owner.left - width;
+            // A maximized or edge-hugging Explorer leaves no room beside it;
+            // keep the panel on screen, overlapping Explorer's edge.
+            x = std::clamp(x, static_cast<int>(work.left),
+                           std::max(static_cast<int>(work.left),
+                                    static_cast<int>(work.right) - width));
+            target.left = x;
+            target.right = x + width;
+            break;
+        }
+        case Attach::ScreenRight:
+        case Attach::ScreenLeft: {
+            RECT work = BetterPanelScreenDockArea(window);
+            target.left = state->detachedAttach == Attach::ScreenRight
+                              ? work.right - width
+                              : work.left;
+            target.right = target.left + width;
+            if (g_settings.windowMatchHeight) {
+                target.top = work.top;
+                target.bottom = work.bottom;
+            } else {
+                target.top = std::clamp(current.top, work.top,
+                                        std::max(work.top, work.bottom - height));
+                target.bottom = target.top + height;
+            }
+            break;
+        }
+        case Attach::ScreenTop:
+        case Attach::ScreenBottom: {
+            RECT work = BetterPanelScreenDockArea(window);
+            target.top = state->detachedAttach == Attach::ScreenTop
+                             ? work.top
+                             : work.bottom - height;
+            target.bottom = target.top + height;
+            if (g_settings.windowMatchHeight) {
+                target.left = work.left;
+                target.right = work.right;
+            } else {
+                target.left = std::clamp(current.left, work.left,
+                                         std::max(work.left, work.right - width));
+                target.right = target.left + width;
+            }
+            break;
+        }
+        case Attach::CornerTopLeft:
+        case Attach::CornerTopRight:
+        case Attach::CornerBottomLeft:
+        case Attach::CornerBottomRight: {
+            RECT work = BetterPanelScreenDockArea(window);
+            bool right = state->detachedAttach == Attach::CornerTopRight ||
+                         state->detachedAttach == Attach::CornerBottomRight;
+            bool bottom = state->detachedAttach == Attach::CornerBottomLeft ||
+                          state->detachedAttach == Attach::CornerBottomRight;
+            target.left = right ? work.right - width : work.left;
+            target.top = bottom ? work.bottom - height : work.top;
+            target.right = target.left + width;
+            target.bottom = target.top + height;
+            break;
+        }
+        case Attach::Free: {
+            // Floating keeps its spot but goes back to the user's own size
+            // (a dock may have stretched it), kept on screen.
+            RECT work = BetterPanelWorkArea(window);
+            width = std::min(width, static_cast<int>(work.right - work.left));
+            height = std::min(height, static_cast<int>(work.bottom - work.top));
+            target.left = std::clamp(static_cast<int>(current.left),
+                                     static_cast<int>(work.left),
+                                     static_cast<int>(work.right) - width);
+            target.top = std::clamp(static_cast<int>(current.top),
+                                    static_cast<int>(work.top),
+                                    static_cast<int>(work.bottom) - height);
+            target.right = target.left + width;
+            target.bottom = target.top + height;
+            break;
+        }
+    }
+    if (EqualRect(&target, &current)) return;
+    state->detachedPositioning = true;
+    BetterPanelPlaceVisibleFrame(window, target);
+    state->detachedPositioning = false;
+}
+
+void BetterPanelApplyDetachedTopmost(BetterPanelState* state) {
+    if (!state || !state->detachedWindow) return;
+    SetWindowPos(state->detachedWindow,
+                 state->detachedTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0,
+                 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+// Remembers the pop-out's size, and its spot when floating.
+void BetterPanelSaveDetachedPlacement(BetterPanelState* state) {
+    if (!state || !state->detachedWindow || IsIconic(state->detachedWindow) ||
+        IsZoomed(state->detachedWindow)) {
+        return;
+    }
+    RECT frame = BetterPanelVisibleFrame(state->detachedWindow);
+    // The user's own size, not a dock's stretched one.
+    SIZE size = state->detachedSize;
+    if (size.cx <= 0 || size.cy <= 0) {
+        size = {frame.right - frame.left, frame.bottom - frame.top};
+    }
+    Wh_SetIntValue(L"betterPanelPopoutWidth", size.cx);
+    Wh_SetIntValue(L"betterPanelPopoutHeight", size.cy);
+    if (state->detachedAttach == BetterPanelWindowAttach::Free) {
+        Wh_SetIntValue(L"betterPanelPopoutX", frame.left);
+        Wh_SetIntValue(L"betterPanelPopoutY", frame.top);
+        Wh_SetIntValue(L"betterPanelPopoutFloating", 1);
+    }
+}
+
+void BetterPanelSetDetachedAttach(BetterPanelState* state,
+                                  BetterPanelWindowAttach attach) {
+    if (!state) return;
+    if (attach != state->detachedAttach) {
+        // Leaving an attached side: Explorer gets its space back first.
+        BetterPanelRestoreExplorerRoom(state);
+    }
+    state->detachedAttach = attach;
+    Wh_SetIntValue(L"betterPanelPopoutAttach", static_cast<int>(attach));
+    // The title bar shows Undock only while docked.
+    if (state->detachedWindow) InvalidateRect(state->detachedWindow, nullptr, FALSE);
+    BetterPanelPositionDetachedWindow(state);
+    BetterPanelSaveDetachedPlacement(state);
+}
+
+// After the user drags the pop-out: attach it to the Explorer edge or dock it
+// to the screen edge it was dropped against, or let it float.
+void BetterPanelSnapDetachedWindow(BetterPanelState* state) {
+    if (!state || !state->detachedWindow) return;
+    using Attach = BetterPanelWindowAttach;
+    HWND window = state->detachedWindow;
+    RECT end = BetterPanelVisibleFrame(window);
+    RECT const& start = state->detachedMoveStart;
+    bool resized = (end.right - end.left) != (start.right - start.left) ||
+                   (end.bottom - end.top) != (start.bottom - start.top);
+    if (resized) {
+        // The new size becomes the user's own, except along a side the dock
+        // stretches to fill (that length comes from the dock, not the user).
+        bool fillsHeight = g_settings.windowMatchHeight &&
+            (state->detachedAttach == Attach::Right ||
+             state->detachedAttach == Attach::Left ||
+             state->detachedAttach == Attach::ScreenRight ||
+             state->detachedAttach == Attach::ScreenLeft);
+        bool fillsWidth = g_settings.windowMatchHeight &&
+            (state->detachedAttach == Attach::ScreenTop ||
+             state->detachedAttach == Attach::ScreenBottom);
+        if (!fillsWidth) state->detachedSize.cx = end.right - end.left;
+        if (!fillsHeight) state->detachedSize.cy = end.bottom - end.top;
+        // Resizing keeps the current place; an attached panel re-aligns.
+        BetterPanelPositionDetachedWindow(state);
+        BetterPanelSaveDetachedPlacement(state);
+        return;
+    }
+    if (EqualRect(&end, &start)) return;
+    int threshold = MulDiv(g_settings.windowSnapDistance, GetDpiForWindow(window), 96);
+    std::optional<Attach> snap;
+    HWND explorer = BetterPanelLinkedExplorer(state);
+    if (g_settings.windowSnapDistance <= 0) {
+        // Snapping is off: wherever it was dropped, it floats there.
+        BetterPanelSetDetachedAttach(state, Attach::Free);
+        return;
+    }
+    if (explorer && IsWindow(explorer) && !IsIconic(explorer)) {
+        RECT owner = BetterPanelVisibleFrame(explorer);
+        bool overlap = end.top < owner.bottom && end.bottom > owner.top;
+        if (overlap && std::abs(end.left - owner.right) <= threshold) {
+            snap = Attach::Right;
+        } else if (overlap && std::abs(end.right - owner.left) <= threshold) {
+            snap = Attach::Left;
+        }
+    }
+    if (!snap) {
+        // Near two screen edges at once is a corner; near one is that edge.
+        // A window as tall (or wide) as the screen touches both ends of that
+        // side, so only the other direction counts for it.
+        RECT work = BetterPanelScreenDockArea(window);
+        bool tall = end.bottom - end.top >= work.bottom - work.top - threshold;
+        bool wide = end.right - end.left >= work.right - work.left - threshold;
+        bool nearRight = !wide && std::abs(end.right - work.right) <= threshold;
+        bool nearLeft = !wide && !nearRight &&
+                        std::abs(end.left - work.left) <= threshold;
+        bool nearBottom = !tall && std::abs(end.bottom - work.bottom) <= threshold;
+        bool nearTop = !tall && !nearBottom &&
+                       std::abs(end.top - work.top) <= threshold;
+        if ((nearLeft || nearRight) && (nearTop || nearBottom)) {
+            snap = nearTop ? (nearLeft ? Attach::CornerTopLeft : Attach::CornerTopRight)
+                           : (nearLeft ? Attach::CornerBottomLeft
+                                       : Attach::CornerBottomRight);
+        } else if (nearRight) {
+            snap = Attach::ScreenRight;
+        } else if (nearLeft) {
+            snap = Attach::ScreenLeft;
+        } else if (nearTop) {
+            snap = Attach::ScreenTop;
+        } else if (nearBottom) {
+            snap = Attach::ScreenBottom;
+        }
+    }
+    if (!snap) {
+        snap = g_settings.windowDetachOnDrag ? Attach::Free
+                                             : state->detachedAttach;
+    }
+    BetterPanelSetDetachedAttach(state, *snap);
+}
+
+// Squeezes every Explorer move or resize so its edge stops at an attached
+// panel that has reached the screen edge: dragged against it, Explorer
+// narrows live (the move loop keeps sending its original size, so it widens
+// again on the way back) instead of sliding underneath the panel.
+void BetterPanelKeepExplorerBesidePanel(BetterPanelState* state, HWND explorer,
+                                        WINDOWPOS* position) {
+    if (!g_settings.windowMakeRoom || !BetterPanelAttachedToExplorer(state) ||
+        state->detachedPositioning || IsIconic(explorer) || IsZoomed(explorer) ||
+        ((position->flags & SWP_NOMOVE) && (position->flags & SWP_NOSIZE))) {
+        return;
+    }
+    int width = BetterPanelDetachedVisibleWidth(state);
+    if (width <= 0) return;
+    RECT outer{};
+    GetWindowRect(explorer, &outer);
+    RECT visible = BetterPanelVisibleFrame(explorer);
+    int insetLeft = visible.left - outer.left;
+    int insetRight = outer.right - visible.right;
+    int x = (position->flags & SWP_NOMOVE) ? outer.left : position->x;
+    int y = (position->flags & SWP_NOMOVE) ? outer.top : position->y;
+    int cx = (position->flags & SWP_NOSIZE) ? outer.right - outer.left
+                                            : position->cx;
+    int cy = (position->flags & SWP_NOSIZE) ? outer.bottom - outer.top
+                                            : position->cy;
+    int left = x + insetLeft;
+    int right = x + cx - insetRight;
+    RECT proposed{x, y, x + cx, y + cy};
+    MONITORINFO monitor{sizeof(monitor)};
+    if (!GetMonitorInfoW(MonitorFromRect(&proposed, MONITOR_DEFAULTTONEAREST),
+                         &monitor)) {
+        return;
+    }
+    RECT const& work = monitor.rcWork;
+    int minimum = MulDiv(480, GetDpiForWindow(explorer), 96);
+    bool attachLeft = state->detachedAttach == BetterPanelWindowAttach::Left;
+    // A move keeps the size the window had when the drag began; a resize
+    // changes it, and the user's new size becomes Explorer's own width.
+    RECT const& start = state->explorerLoopStart;
+    bool moving = state->explorerMoving && cx == start.right - start.left &&
+                  cy == start.bottom - start.top;
+    if (state->explorerMoving && !moving) state->explorerNaturalWidth = 0;
+    int proposedWidth = right - left;
+    bool changed = false;
+    if (moving && state->explorerNaturalWidth > proposedWidth) {
+        // Grow back toward the width it had before being squashed, on the
+        // panel's side; the limit below stops it at the panel again.
+        if (attachLeft) {
+            left = right - state->explorerNaturalWidth;
+        } else {
+            right = left + state->explorerNaturalWidth;
+        }
+        changed = true;
+    }
+    bool squeezed = false;
+    if (attachLeft) {
+        int limit = work.left + width;
+        if (left < limit) {
+            left = limit;
+            right = std::max(right, left + minimum);
+            squeezed = true;
+        }
+    } else {
+        int limit = work.right - width;
+        if (right > limit) {
+            right = limit;
+            left = std::min(left, right - minimum);
+            squeezed = true;
+        }
+    }
+    // The width is forgotten once a drag ends at full width (WM_EXITSIZEMOVE);
+    // mid-drag the move loop keeps sending the squashed starting size.
+    // Resizing Explorer into the panel only stops the edge; it doesn't set a
+    // width to grow back to.
+    bool resizing = state->explorerMoving && !moving;
+    if (squeezed && !resizing && !state->explorerNaturalWidth) {
+        state->explorerNaturalWidth = proposedWidth;
+    }
+    if (!squeezed && !changed) return;
+    position->x = left - insetLeft;
+    position->cx = right - left + insetLeft + insetRight;
+    position->y = y;
+    position->cy = cy;
+    position->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
+}
+
+// Follows the Explorer window when it moves, resizes or is restored. The
+// pop-out moves inside Explorer's own WM_WINDOWPOSCHANGED, in the same step
+// as Explorer, so it doesn't trail behind while Explorer is dragged.
+LRESULT CALLBACK BetterPanelExplorerFollowProc(HWND window, UINT message,
+                                               WPARAM wParam, LPARAM lParam,
+                                               DWORD_PTR) {
+    if (message != WM_WINDOWPOSCHANGED && message != WM_WINDOWPOSCHANGING &&
+        message != WM_ENTERSIZEMOVE && message != WM_EXITSIZEMOVE &&
+        message != WM_GETMINMAXINFO) {
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
+    std::shared_ptr<BetterPanelState> state;
+    {
+        std::lock_guard lock(g_betterPanelMutex);
+        for (auto const& candidate : g_betterPanels) {
+            if (candidate && candidate->detached &&
+                BetterPanelLinkedExplorer(candidate.get()) == window) {
+                state = candidate;
+                break;
+            }
+        }
+    }
+    if (state && state->unloaded) state = nullptr;
+    if (state && message == WM_WINDOWPOSCHANGING && lParam) {
+        BetterPanelKeepExplorerBesidePanel(
+            state.get(), window, reinterpret_cast<WINDOWPOS*>(lParam));
+    }
+    LRESULT result = DefSubclassProc(window, message, wParam, lParam);
+    if (!state) return result;
+    switch (message) {
+        case WM_GETMINMAXINFO:
+            // A maximized Explorer fills the screen beside an attached panel.
+            if (g_settings.windowMakeRoom &&
+                BetterPanelAttachedToExplorer(state.get()) && lParam) {
+                auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+                int width = BetterPanelDetachedVisibleWidth(state.get());
+                info->ptMaxSize.x = std::max(200L, info->ptMaxSize.x - width);
+                if (state->detachedAttach == BetterPanelWindowAttach::Left) {
+                    info->ptMaxPosition.x += width;
+                }
+            }
+            break;
+        case WM_ENTERSIZEMOVE:
+            // While the user drags Explorer the panel just stays on screen;
+            // Explorer is narrowed once it is released.
+            state->explorerMoving = true;
+            GetWindowRect(window, &state->explorerLoopStart);
+            break;
+        case WM_EXITSIZEMOVE:
+            state->explorerMoving = false;
+            if (state->explorerNaturalWidth) {
+                RECT frame = BetterPanelVisibleFrame(window);
+                if (frame.right - frame.left >= state->explorerNaturalWidth) {
+                    state->explorerNaturalWidth = 0;  // back to full width
+                }
+            }
+            BetterPanelPositionDetachedWindow(state.get());
+            break;
+        case WM_WINDOWPOSCHANGED:
+            if (lParam) {
+                auto* position = reinterpret_cast<WINDOWPOS*>(lParam);
+                if (!(position->flags & SWP_NOMOVE) ||
+                    !(position->flags & SWP_NOSIZE) ||
+                    (position->flags & SWP_SHOWWINDOW)) {
+                    BetterPanelPositionDetachedWindow(state.get());
+                }
+            }
+            break;
+    }
+    return result;
+}
+
+void BetterPanelUnhookExplorerFollow(BetterPanelState* state) {
+    if (!state || !state->explorerFollowSubclassed) return;
+    if (state->followHookedWindow && IsWindow(state->followHookedWindow)) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(
+            state->followHookedWindow, BetterPanelExplorerFollowProc);
+    }
+    state->explorerFollowSubclassed = false;
+    state->followHookedWindow = nullptr;
+}
+
+void BetterPanelHookExplorerFollow(BetterPanelState* state) {
+    BetterPanelUnhookExplorerFollow(state);
+    HWND linked = BetterPanelLinkedExplorer(state);
+    if (!linked) return;
+    state->explorerFollowSubclassed =
+        WindhawkUtils::SetWindowSubclassFromAnyThread(
+            linked, BetterPanelExplorerFollowProc, 0);
+    if (state->explorerFollowSubclassed) state->followHookedWindow = linked;
+}
+
+// Applies pop-out settings changed in Windhawk while the window is open.
+void BetterPanelApplyDetachedWindowSettings(BetterPanelState* state,
+                                            bool force) {
+    if (!state || !state->detachedWindow) return;
+    if (force || state->appliedTopmostSetting != g_settings.windowAlwaysOnTop) {
+        state->appliedTopmostSetting = g_settings.windowAlwaysOnTop;
+        state->detachedTopmost = g_settings.windowAlwaysOnTop;
+        BetterPanelApplyDetachedTopmost(state);
+    }
+    if (force ||
+        state->appliedMinimizeSetting != g_settings.windowMinimizeWithExplorer) {
+        state->appliedMinimizeSetting = g_settings.windowMinimizeWithExplorer;
+        // An owned window hides with Explorer; an unowned one stays.
+        SetWindowLongPtrW(state->detachedWindow, GWLP_HWNDPARENT,
+                          g_settings.windowMinimizeWithExplorer
+                              ? reinterpret_cast<LONG_PTR>(
+                                    BetterPanelLinkedExplorer(state))
+                              : 0);
+        BetterPanelApplyDetachedTopmost(state);
+    }
+}
+
+void BetterPanelAddDetachedMenu(HWND window) {
+    HMENU menu = GetSystemMenu(window, FALSE);
+    if (!menu) return;
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 0x1F80, L"Workspace");
+    AppendMenuW(menu, MF_STRING, 0x1F70, L"Link to Explorer window...");
+    AppendMenuW(menu, MF_STRING, kBetterPanelMenuTopmost, L"Always on top");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    for (auto const& item : kBetterPanelPlacementMenu) {
+        AppendMenuW(menu, MF_STRING, item.command, item.label);
+    }
+}
+
+void BetterPanelUpdateDetachedMenu(BetterPanelState* state, HMENU menu) {
+    if (!state || !menu) return;
+    CheckMenuItem(menu, kBetterPanelMenuTopmost,
+                  MF_BYCOMMAND | (state->detachedTopmost ? MF_CHECKED
+                                                         : MF_UNCHECKED));
+    CheckMenuItem(menu, 0x1F80,
+                  MF_BYCOMMAND | (state->workspaceMode ? MF_CHECKED
+                                                       : MF_UNCHECKED));
+    UINT selected = kBetterPanelMenuFree;
+    for (auto const& item : kBetterPanelPlacementMenu) {
+        if (item.attach == state->detachedAttach) selected = item.command;
+    }
+    CheckMenuRadioItem(menu, kBetterPanelMenuAttachRight, kBetterPanelMenuFree,
+                       selected, MF_BYCOMMAND);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Link: choosing which Explorer window the pop-out belongs to.
+
+constexpr UINT kBetterPanelMenuLink = 0x1F70;
+constexpr UINT kBetterPanelMenuWorkspace = 0x1F80;
+
+PCWSTR BetterPanelDetachedClassName();
+HMODULE BetterPanelGetThisModule();
+
+std::vector<HWND> BetterPanelOpenExplorerWindows() {
+    std::vector<HWND> windows;
+    EnumWindows(
+        [](HWND window, LPARAM parameter) -> BOOL {
+            DWORD process = 0;
+            GetWindowThreadProcessId(window, &process);
+            WCHAR className[32]{};
+            if (process == GetCurrentProcessId() && IsWindowVisible(window) &&
+                GetClassNameW(window, className, ARRAYSIZE(className)) &&
+                _wcsicmp(className, L"CabinetWClass") == 0) {
+                reinterpret_cast<std::vector<HWND>*>(parameter)->push_back(
+                    window);
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&windows));
+    return windows;
+}
+
+std::wstring BetterPanelWindowTitle(HWND window) {
+    WCHAR title[260]{};
+    GetWindowTextW(window, title, ARRAYSIZE(title));
+    return title[0] ? std::wstring(title) : std::wstring(L"File Explorer");
+}
+
+void BetterPanelSetLinkedExplorer(BetterPanelState* state, HWND window) {
+    if (!state || !window || !IsWindow(window)) return;
+    // The old window gets its space back before the link moves.
+    BetterPanelRestoreExplorerRoom(state);
+    BetterPanelUnhookExplorerFollow(state);
+    state->linkedWindow = window;
+    BetterPanelHookExplorerFollow(state);
+    if (state->detachedWindow && g_settings.windowMinimizeWithExplorer) {
+        SetWindowLongPtrW(state->detachedWindow, GWLP_HWNDPARENT,
+                          reinterpret_cast<LONG_PTR>(window));
+    }
+    state->detachedSelectionSignature.clear();
+    BetterPanelPositionDetachedWindow(state);
+    BetterPanelApplyDetachedTopmost(state);
+}
+
+// Pops up the open Explorer windows at |point|; returns the chosen one.
+HWND BetterPanelPickExplorerWindow(BetterPanelState* state, HWND owner,
+                                   POINT point) {
+    auto windows = BetterPanelOpenExplorerWindows();
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return nullptr;
+    HWND linked = BetterPanelLinkedExplorer(state);
+    if (windows.empty()) {
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0,
+                    L"No Explorer windows are open");
+    }
+    for (size_t i = 0; i < windows.size() && i < 60; ++i) {
+        AppendMenuW(menu,
+                    MF_STRING | (windows[i] == linked ? MF_CHECKED : 0),
+                    i + 1, BetterPanelWindowTitle(windows[i]).c_str());
+    }
+    // The pop-out's placement, here as well as in the title-bar menu and
+    // the settings, so it can be changed without leaving the window.
+    constexpr UINT kPlacementBase = 1000;
+    constexpr UINT kTopmostCommand = 2000;
+    if (state && state->detached) {
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"Window position");
+        for (size_t i = 0; i < ARRAYSIZE(kBetterPanelPlacementMenu); ++i) {
+            auto const& item = kBetterPanelPlacementMenu[i];
+            AppendMenuW(menu,
+                        MF_STRING | (item.attach == state->detachedAttach
+                                         ? MF_CHECKED : 0),
+                        kPlacementBase + i, item.label);
+        }
+        AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(menu, MF_STRING | (state->detachedTopmost ? MF_CHECKED : 0),
+                    kTopmostCommand, L"Always on top");
+    }
+    UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY,
+                                    point.x, point.y, owner, nullptr);
+    DestroyMenu(menu);
+    if (command >= kPlacementBase &&
+        command < kPlacementBase + ARRAYSIZE(kBetterPanelPlacementMenu)) {
+        BetterPanelSetDetachedAttach(
+            state, kBetterPanelPlacementMenu[command - kPlacementBase].attach);
+        return nullptr;
+    }
+    if (command == kTopmostCommand) {
+        state->detachedTopmost = !state->detachedTopmost;
+        BetterPanelApplyDetachedTopmost(state);
+        return nullptr;
+    }
+    return command >= 1 && command <= windows.size() ? windows[command - 1]
+                                                     : nullptr;
+}
+
+// The shell browser of an Explorer window's visible tab, from the Shell's
+// window registry. Each Explorer window runs on its own thread; going
+// through ShellWindows gives a proxy that is safe to call from another one
+// (a raw CWM_GETISHELLBROWSER pointer is not).
+winrt::com_ptr<IShellBrowser> BetterPanelExplorerTabBrowser(HWND root) {
+    // SID_STopLevelBrowser (shlguid.h clashes with this file's GUID setup).
+    static constexpr GUID kTopLevelBrowser = {
+        0x4C96BE40, 0x915C, 0x11CF,
+        {0x99, 0xD3, 0x00, 0xAA, 0x00, 0x4A, 0xE8, 0x37}};
+    if (!root) return nullptr;
+    winrt::com_ptr<IShellWindows> windows;
+    if (FAILED(CoCreateInstance(CLSID_ShellWindows, nullptr, CLSCTX_ALL,
+                                IID_PPV_ARGS(windows.put()))) ||
+        !windows) {
+        return nullptr;
+    }
+    long count = 0;
+    windows->get_Count(&count);
+    winrt::com_ptr<IShellBrowser> fallback;
+    for (long i = 0; i < count; ++i) {
+        VARIANT index{};
+        index.vt = VT_I4;
+        index.lVal = i;
+        winrt::com_ptr<IDispatch> dispatch;
+        if (FAILED(windows->Item(index, dispatch.put())) || !dispatch) continue;
+        auto browser = dispatch.try_as<IWebBrowser2>();
+        SHANDLE_PTR handle = 0;
+        if (!browser || FAILED(browser->get_HWND(&handle)) ||
+            reinterpret_cast<HWND>(handle) != root) {
+            continue;
+        }
+        auto services = dispatch.try_as<IServiceProvider>();
+        winrt::com_ptr<IShellBrowser> shellBrowser;
+        if (!services ||
+            FAILED(services->QueryService(kTopLevelBrowser,
+                                          IID_PPV_ARGS(shellBrowser.put()))) ||
+            !shellBrowser) {
+            continue;
+        }
+        // One entry per tab; the visible one is the tab in front.
+        HWND tab = nullptr;
+        if (SUCCEEDED(shellBrowser->GetWindow(&tab)) && tab &&
+            IsWindowVisible(tab)) {
+            return shellBrowser;
+        }
+        if (!fallback) fallback = shellBrowser;
+    }
+    return fallback;
+}
+
+// The folder an Explorer window's active tab shows.
+std::wstring BetterPanelExplorerFolder(HWND root,
+                                       PIDLIST_ABSOLUTE* pidl = nullptr) {
+    if (pidl) *pidl = nullptr;
+    if (!root) return {};
+    if (auto tabBrowser = BetterPanelExplorerTabBrowser(root)) {
+        winrt::com_ptr<IShellView> view;
+        winrt::com_ptr<IShellItem> item;
+        if (SUCCEEDED(tabBrowser->QueryActiveShellView(view.put())) && view) {
+            if (auto folderView = view.try_as<IFolderView2>()) {
+                folderView->GetFolder(IID_PPV_ARGS(item.put()));
+            }
+        }
+        PWSTR name = nullptr;
+        if (item && SUCCEEDED(item->GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING,
+                                                   &name)) && name) {
+            std::wstring result(name);
+            CoTaskMemFree(name);
+            if (pidl && FAILED(SHGetIDListFromObject(item.get(), pidl))) {
+                *pidl = nullptr;
+            }
+            return result;
+        }
+    }
+    // Same-thread fallback.
+    if (GetWindowThreadProcessId(root, nullptr) != GetCurrentThreadId()) {
+        return {};
+    }
+    // Windows 11 Explorer keeps a browser per tab; ask the active tab.
+    HWND tab = nullptr;
+    {
+        BetterPanelExplorerWindowScope scope(root);
+        tab = BetterPanelResolveFocusedTabWindow();
+    }
+    IShellBrowser* browser = BetterPanelGetShellBrowser(tab ? tab : root);
+    if (!browser) return {};
+    winrt::com_ptr<IShellView> view;
+    if (FAILED(browser->QueryActiveShellView(view.put())) || !view) return {};
+    auto folderView = view.try_as<IFolderView2>();
+    winrt::com_ptr<IShellItem> item;
+    if (!folderView ||
+        FAILED(folderView->GetFolder(IID_PPV_ARGS(item.put()))) || !item) {
+        return {};
+    }
+    PWSTR name = nullptr;
+    if (FAILED(item->GetDisplayName(SIGDN_DESKTOPABSOLUTEPARSING, &name)) ||
+        !name) {
+        return {};
+    }
+    std::wstring result(name);
+    CoTaskMemFree(name);
+    if (pidl && FAILED(SHGetIDListFromObject(item.get(), pidl))) *pidl = nullptr;
+    return result;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Workspace: up to four Better Panels side by side in the pop-out. Explorer
+// stays the navigator. Only boxes with Follow on change with what is selected
+// in the linked Explorer window; every other box keeps what it last showed,
+// so several files or folders can be kept in view at once. A locked box never
+// changes, not even from its menu.
+// The boxes are laid out singly, side by side, stacked or in a grid with
+// draggable dividers.
+
+constexpr wchar_t kBetterPanelWorkspaceProp[] = L"BetterPanelWorkspace";
+// Posted to the Workspace host when a box's panel is clicked; wParam = box.
+constexpr UINT kBetterPanelWorkspaceClickMessage = WM_APP + 0x51;
+// Posted when a box's panel is double-clicked; wParam = box.
+constexpr UINT kBetterPanelWorkspaceRevealMessage = WM_APP + 0x52;
+constexpr UINT_PTR kBetterPanelWorkspaceRevealTimer = 0x5245;
+
+void BetterPanelInstallDetailPanel(FrameworkElement element,
+                                   muxc::StackPanel const& startupLoadingHost);
+bool BetterPanelGetWindowId(HWND window,
+                            winrt::Microsoft::UI::WindowId& windowId);
+HWND BetterPanelGetWindowFromId(winrt::Microsoft::UI::WindowId windowId);
+void BetterPanelUnwatchNativeDetailsVisibility(
+    std::shared_ptr<BetterPanelState> const& state);
+void BetterPanelRemoveNativePreviewControls(
+    std::shared_ptr<BetterPanelState> const& state);
+std::wstring BetterPanelExplorerFolder(HWND root, PIDLIST_ABSOLUTE* pidl);
+bool BetterPanelIsActiveHome();
+
+struct BetterPanelWorkspaceBox {
+    bool locked = false;
+    bool follow = false;  // changes with Explorer's selection
+    // The box's Better Panel, in its own XAML island.
+    muxh::DesktopWindowXamlSource source{nullptr};
+    HWND island = nullptr;
+    std::weak_ptr<BetterPanelState> panelState;
+    RECT header{};
+    RECT panel{};
+    // "Drop here" card that fades in over the box while files are dragged
+    // over it.
+    mux::FrameworkElement dropOverlay{nullptr};
+    mux::FrameworkElement dropCard{nullptr};
+    muxc::FontIcon dropIcon{nullptr};
+    muxc::TextBlock dropTitle{nullptr};
+    muxc::TextBlock dropDetail{nullptr};
+    // Volume of the files being dragged over the box ("" until known), so a
+    // drop moves within a drive and copies across drives, as in Explorer.
+    std::wstring dragSourceVolume;
+};
+
+enum BetterPanelWorkspaceAction {
+    kWorkspaceLayout = 1, kWorkspaceFollow, kWorkspaceLink, kWorkspaceLock,
+    kWorkspaceMore, kWorkspaceSelect,
+};
+
+struct BetterPanelWorkspaceHit {
+    RECT rect;
+    int action;
+    int box;
+    int arg;
+};
+
+class BetterPanelWorkspaceDropTarget;
+
+struct BetterPanelWorkspace {
+    BetterPanelState* state = nullptr;
+    HWND host = nullptr;
+    int layout = 2;  // 1 single, 2 side by side, 3 stacked, 4 grid
+    double splitX = 0.5;
+    double splitY = 0.5;
+    int active = 0;  // the selected box
+    // The linked Explorer's selection the following boxes last caught up with.
+    std::optional<std::wstring> seen;
+    BetterPanelWorkspaceBox boxes[4];
+    std::vector<BetterPanelWorkspaceHit> hits;
+    int hover = -1;
+    bool tracking = false;
+    int dragging = 0;  // 1 vertical divider, 2 horizontal divider
+    // The header files are being dragged over, highlighted as the drop spot.
+    int dropBox = -1;
+    // Double-clicking a box takes the linked Explorer back to it: the folder
+    // to reach, the items to select once it has loaded, and retries left.
+    std::wstring revealFolder;
+    std::vector<std::wstring> revealPaths;
+    int revealTries = 0;
+    DWORD lastHeaderClick = 0;
+    int lastHeaderBox = -1;
+    BetterPanelWorkspaceDropTarget* dropTarget = nullptr;
+    RECT area{};
+    RECT dividerX{};
+    RECT dividerY{};
+};
+
+int BetterPanelWorkspaceBoxCount(BetterPanelWorkspace const* workspace) {
+    return workspace->layout == 4 ? 4 : workspace->layout == 1 ? 1 : 2;
+}
+
+int BetterPanelWorkspaceScale(BetterPanelWorkspace const* workspace,
+                              int value) {
+    return MulDiv(value, GetDpiForWindow(workspace->host), 96);
+}
+
+// The window a panel treats as Explorer's current tab: the linked Explorer
+// window for a pop-out or a Workspace box, otherwise the panel's own window.
+HWND BetterPanelPanelScopeWindow(BetterPanelState* state) {
+    if (!state) return nullptr;
+    if (state->detached) {
+        if (HWND linked = BetterPanelLinkedExplorer(state)) return linked;
+    }
+    return state->explorerWindow;
+}
+
+bool BetterPanelWorkspaceDark() {
+    DWORD light = 1;
+    DWORD size = sizeof(light);
+    RegGetValueW(HKEY_CURRENT_USER,
+                 L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\"
+                 L"Personalize",
+                 L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light,
+                 &size);
+    return light == 0;
+}
+
+void BetterPanelWorkspaceSave(BetterPanelWorkspace* workspace) {
+    std::wstring value = L"3|" + std::to_wstring(workspace->layout) + L"|" +
+        std::to_wstring(static_cast<int>(workspace->splitX * 1000)) + L"|" +
+        std::to_wstring(static_cast<int>(workspace->splitY * 1000)) + L"|" +
+        std::to_wstring(workspace->active);
+    for (auto const& box : workspace->boxes) {
+        value += box.locked ? L"|1" : L"|0";
+    }
+    for (auto const& box : workspace->boxes) {
+        value += box.follow ? L"|1" : L"|0";
+    }
+    Wh_SetStringValue(L"betterPanelWorkspaceBoxes", value.c_str());
+}
+
+void BetterPanelWorkspaceLoad(BetterPanelWorkspace* workspace) {
+    WCHAR buffer[128]{};
+    Wh_GetStringValue(L"betterPanelWorkspaceBoxes", buffer, ARRAYSIZE(buffer));
+    std::vector<int> fields;
+    for (std::wstring_view rest{buffer}; !rest.empty();) {
+        size_t bar = rest.find(L'|');
+        fields.push_back(_wtoi(std::wstring(rest.substr(0, bar)).c_str()));
+        if (bar == std::wstring_view::npos) break;
+        rest.remove_prefix(bar + 1);
+    }
+    if (fields.size() >= 13 && fields[0] == 3) {
+        workspace->layout = std::clamp(fields[1], 1, 4);
+        workspace->splitX = std::clamp(fields[2], 150, 850) / 1000.0;
+        workspace->splitY = std::clamp(fields[3], 150, 850) / 1000.0;
+        workspace->active = std::clamp(fields[4], 0, 3);
+        for (int i = 0; i < 4; ++i) {
+            workspace->boxes[i].locked = fields[5 + i] != 0;
+            workspace->boxes[i].follow = fields[9 + i] != 0 && !workspace->boxes[i].locked;
+        }
+    } else {
+        workspace->boxes[0].follow = true;
+    }
+}
+
+std::shared_ptr<BetterPanelState> BetterPanelWorkspaceBoxState(
+    BetterPanelWorkspaceBox const& box) {
+    auto state = box.panelState.lock();
+    return state && !state->unloaded ? state : nullptr;
+}
+
+// What is selected in the linked Explorer window, as a comparable string.
+std::optional<std::wstring> BetterPanelWorkspaceExplorerSignature(
+    BetterPanelWorkspace* workspace) {
+    HWND linked = BetterPanelLinkedExplorer(workspace->state);
+    if (!linked) return std::nullopt;
+    try {
+        BetterPanelExplorerWindowScope scope(linked);
+        BetterPanelInvalidateExplorerQueryCaches();
+        auto paths = BetterPanelGetActiveSelectionPaths(false);
+        std::wstring signature = L"|";
+        for (auto const& path : paths) signature += path + L"|";
+        signature += L"folder:" + BetterPanelGetActiveFolderPath();
+        if (paths.empty() && BetterPanelIsActiveHome()) signature += L"|home";
+        return signature;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+// A box remembers what it shows (folder, then the selected items, one per
+// line; "*home" for Home), so it survives closing Explorer.
+void BetterPanelWorkspaceSaveBox(BetterPanelWorkspace* workspace, int index) {
+    auto state = BetterPanelWorkspaceBoxState(workspace->boxes[index]);
+    if (!state) return;
+    std::wstring value = state->workspaceHome ? L"*home" : state->workspaceFolder;
+    for (auto const& path : state->workspacePaths) value += L"\n" + path;
+    std::wstring name = L"betterPanelWorkspaceBox" + std::to_wstring(index);
+    Wh_SetStringValue(name.c_str(), value.c_str());
+}
+
+bool BetterPanelWorkspaceLoadBox(int index, BetterPanelState* state) {
+    std::vector<WCHAR> buffer(32768);
+    std::wstring name = L"betterPanelWorkspaceBox" + std::to_wstring(index);
+    Wh_GetStringValue(name.c_str(), buffer.data(), buffer.size());
+    std::wstring_view rest{buffer.data()};
+    if (rest.empty()) return false;
+    std::vector<std::wstring> lines;
+    while (true) {
+        size_t newline = rest.find(L'\n');
+        lines.emplace_back(rest.substr(0, newline));
+        if (newline == std::wstring_view::npos) break;
+        rest.remove_prefix(newline + 1);
+    }
+    state->workspaceHome = lines.front() == L"*home";
+    state->workspaceFolder = state->workspaceHome ? std::wstring() : lines.front();
+    state->workspacePaths.assign(lines.begin() + 1, lines.end());
+    // Items deleted since then are dropped.
+    std::erase_if(state->workspacePaths, [](auto const& path) {
+        return GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES;
+    });
+    return true;
+}
+
+// Box |index| takes what Explorer has selected right now and keeps it.
+void BetterPanelWorkspaceUpdateBox(BetterPanelWorkspace* workspace, int index) {
+    auto state = BetterPanelWorkspaceBoxState(workspace->boxes[index]);
+    HWND linked = BetterPanelLinkedExplorer(workspace->state);
+    if (!state || !linked) return;
+    try {
+        BetterPanelExplorerWindowScope scope(linked);
+        BetterPanelInvalidateExplorerQueryCaches();
+        state->workspacePaths = BetterPanelGetActiveSelectionPaths(false);
+        state->workspaceFolder = BetterPanelGetActiveFolderPath();
+        state->workspaceHome = state->workspacePaths.empty() &&
+                               BetterPanelIsActiveHome();
+        if (state->workspaceHome) state->workspaceFolder.clear();
+    } catch (...) {
+        return;
+    }
+    state->explorerWindow = linked;
+    BetterPanelRefresh(state);
+    BetterPanelWorkspaceSaveBox(workspace, index);
+    InvalidateRect(workspace->host, nullptr, FALSE);
+}
+std::wstring BetterPanelWorkspaceDropFolder(BetterPanelWorkspace* workspace,
+                                            int index);
+std::wstring BetterPanelDestinationLabel(std::wstring const& path);
+HRESULT BetterPanelMoveItemsToFolder(std::vector<std::wstring> const& sources,
+                                     std::wstring const& destination, HWND owner,
+                                     bool copy);
+
+// Shows the "Drop here" card on box |index| for a drag that would |effect|
+// (a DROPEFFECT), and hides it on every other box. -1 hides them all.
+void BetterPanelWorkspaceShowDrop(BetterPanelWorkspace* workspace, int index,
+                                  DWORD effect) {
+    if (!workspace) return;
+    for (int i = 0; i < 4; ++i) {
+        auto& box = workspace->boxes[i];
+        if (!box.dropOverlay) continue;
+        bool show = i == index && effect != DROPEFFECT_NONE;
+        try {
+            if (show) {
+                bool move = effect & DROPEFFECT_MOVE;
+                bool link = !move && !(effect & DROPEFFECT_COPY) &&
+                            (effect & DROPEFFECT_LINK);
+                std::wstring folder = BetterPanelWorkspaceDropFolder(workspace, i);
+                box.dropTitle.Text(move ? L"Drop to move here"
+                                   : link ? L"Drop to add shortcuts here"
+                                          : L"Drop to copy here");
+                box.dropIcon.Glyph(move ? L"" : link ? L"" : L"");
+                box.dropDetail.Text(BetterPanelDestinationLabel(folder));
+            }
+            float opacity = show ? 1.0f : 0.0f;
+            if (box.dropOverlay.Opacity() != opacity) {
+                box.dropOverlay.Opacity(opacity);
+                box.dropCard.Translation({0.0f, show ? 0.0f : 10.0f, 0.0f});
+                box.dropCard.Scale(show ? winrt::Windows::Foundation::Numerics::float3{1, 1, 1}
+                                        : winrt::Windows::Foundation::Numerics::float3{0.96f, 0.96f, 1});
+            }
+        } catch (...) {
+        }
+    }
+}
+
+// A drop through the box's own XAML (when the island takes drags itself):
+// reads the dropped files, then copies or moves them with the Shell.
+winrt::fire_and_forget BetterPanelWorkspaceXamlDrop(HWND host, int index,
+                                                    mux::DragEventArgs args) {
+    namespace dt = winrt::Windows::ApplicationModel::DataTransfer;
+    auto deferral = args.GetDeferral();
+    auto view = args.DataView();
+    bool copy = args.AcceptedOperation() != dt::DataPackageOperation::Move;
+    winrt::apartment_context ui;
+    std::vector<std::wstring> paths;
+    try {
+        if (view.Contains(dt::StandardDataFormats::StorageItems())) {
+            auto items = co_await view.GetStorageItemsAsync();
+            for (auto const& item : items) {
+                if (!item.Path().empty()) paths.emplace_back(item.Path());
+            }
+        }
+    } catch (...) {
+    }
+    deferral.Complete();
+    co_await ui;
+    auto* workspace = static_cast<BetterPanelWorkspace*>(
+        GetPropW(host, kBetterPanelWorkspaceProp));
+    if (!workspace || paths.empty()) co_return;
+    std::wstring folder = BetterPanelWorkspaceDropFolder(workspace, index);
+    if (folder.empty()) co_return;
+    BetterPanelMoveItemsToFolder(paths, folder, GetAncestor(host, GA_ROOT), copy);
+}
+
+std::wstring BetterPanelVolumeOf(std::wstring const& path) {
+    WCHAR volume[MAX_PATH]{};
+    if (path.empty() || !GetVolumePathNameW(path.c_str(), volume, ARRAYSIZE(volume))) {
+        return {};
+    }
+    return volume;
+}
+
+// Learns which drive the dragged files are on, for the default operation.
+winrt::fire_and_forget BetterPanelWorkspaceReadDragSource(
+    HWND host, int index,
+    winrt::Windows::ApplicationModel::DataTransfer::DataPackageView view) {
+    namespace dt = winrt::Windows::ApplicationModel::DataTransfer;
+    winrt::apartment_context ui;
+    std::wstring first;
+    try {
+        if (view.Contains(dt::StandardDataFormats::StorageItems())) {
+            auto items = co_await view.GetStorageItemsAsync();
+            if (items.Size() > 0) first = items.GetAt(0).Path();
+        }
+    } catch (...) {
+    }
+    std::wstring volume = BetterPanelVolumeOf(first);
+    co_await ui;
+    if (auto* workspace = static_cast<BetterPanelWorkspace*>(
+            GetPropW(host, kBetterPanelWorkspaceProp))) {
+        workspace->boxes[index].dragSourceVolume = volume;
+    }
+}
+
+// The box's "Drop here" card, laid over its panel. It fades and slides in
+// with implicit transitions. The box also takes drops through XAML, for when
+// the island handles drags itself instead of passing them to the host.
+void BetterPanelWorkspaceBuildDropOverlay(BetterPanelWorkspaceBox& box,
+                                          muxc::Grid const& root, HWND host,
+                                          int index) {
+    namespace dt = winrt::Windows::ApplicationModel::DataTransfer;
+    auto resources = winrt::Microsoft::UI::Xaml::Application::Current().Resources();
+    auto brush = [&](PCWSTR key) {
+        return resources.TryLookup(winrt::box_value(key))
+            .try_as<winrt::Microsoft::UI::Xaml::Media::Brush>();
+    };
+    winrt::Windows::UI::Color accent{0xFF, 0x00, 0x78, 0xD4};
+    if (auto value = resources.TryLookup(winrt::box_value(L"SystemAccentColor"))) {
+        accent = winrt::unbox_value_or<winrt::Windows::UI::Color>(value, accent);
+    }
+    muxc::Border overlay;
+    overlay.IsHitTestVisible(false);
+    overlay.Margin(Thickness{8, 8, 8, 8});
+    overlay.CornerRadius(CornerRadius{12});
+    overlay.BorderThickness(Thickness{2, 2, 2, 2});
+    overlay.BorderBrush(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(accent));
+    auto tint = accent;
+    tint.A = 0x38;
+    overlay.Background(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(tint));
+    overlay.Opacity(0);
+    overlay.OpacityTransition(mux::ScalarTransition());
+
+    muxc::StackPanel card;
+    card.HorizontalAlignment(HorizontalAlignment::Center);
+    card.VerticalAlignment(VerticalAlignment::Center);
+    card.Spacing(6);
+    card.Padding(Thickness{20, 16, 20, 16});
+    card.CornerRadius(CornerRadius{10});
+    if (auto background = brush(L"AcrylicInAppFillColorDefaultBrush")) {
+        card.Background(background);
+    } else if (auto solid = brush(L"SolidBackgroundFillColorBaseBrush")) {
+        card.Background(solid);
+    }
+    card.Translation({0.0f, 10.0f, 0.0f});
+    card.Scale({0.96f, 0.96f, 1.0f});
+    card.TranslationTransition(mux::Vector3Transition());
+    card.ScaleTransition(mux::Vector3Transition());
+    // Scale around the middle of the card.
+    card.SizeChanged([](winrt::Windows::Foundation::IInspectable const& sender,
+                        mux::SizeChangedEventArgs const& args) {
+        if (auto element = sender.try_as<mux::UIElement>()) {
+            element.CenterPoint({static_cast<float>(args.NewSize().Width / 2),
+                                 static_cast<float>(args.NewSize().Height / 2), 0});
+        }
+    });
+    muxc::FontIcon icon;
+    icon.Glyph(L"");
+    icon.FontSize(28);
+    icon.Foreground(winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(accent));
+    icon.HorizontalAlignment(HorizontalAlignment::Center);
+    card.Children().Append(icon);
+    muxc::TextBlock title;
+    title.FontSize(15);
+    title.FontWeight(winrt::Microsoft::UI::Text::FontWeights::SemiBold());
+    title.HorizontalAlignment(HorizontalAlignment::Center);
+    card.Children().Append(title);
+    muxc::TextBlock detail;
+    detail.FontSize(12);
+    detail.Opacity(0.75);
+    detail.HorizontalAlignment(HorizontalAlignment::Center);
+    detail.TextTrimming(mux::TextTrimming::CharacterEllipsis);
+    card.Children().Append(detail);
+    overlay.Child(card);
+    root.Children().Append(overlay);
+
+    box.dropOverlay = overlay;
+    box.dropCard = card;
+    box.dropIcon = icon;
+    box.dropTitle = title;
+    box.dropDetail = detail;
+
+    auto workspaceOf = [host]() {
+        return static_cast<BetterPanelWorkspace*>(
+            GetPropW(host, kBetterPanelWorkspaceProp));
+    };
+    root.AllowDrop(true);
+    root.DragEnter([workspaceOf, host, index](auto const&, mux::DragEventArgs const& args) {
+        if (auto* workspace = workspaceOf()) {
+            workspace->boxes[index].dragSourceVolume.clear();
+            BetterPanelWorkspaceReadDragSource(host, index, args.DataView());
+        }
+    });
+    root.DragOver([workspaceOf, index](auto const&, mux::DragEventArgs const& args) {
+        auto* workspace = workspaceOf();
+        std::wstring folder =
+            workspace ? BetterPanelWorkspaceDropFolder(workspace, index) : std::wstring();
+        bool target = !folder.empty() &&
+                      args.DataView().Contains(dt::StandardDataFormats::StorageItems());
+        // Explorer's rules: Ctrl copies, Shift moves, otherwise move within
+        // a drive and copy to another drive.
+        using Modifiers = dt::DragDrop::DragDropModifiers;
+        auto modifiers = args.Modifiers();
+        bool move = false;
+        if ((modifiers & Modifiers::Control) == Modifiers::Control) {
+            move = false;
+        } else if ((modifiers & Modifiers::Shift) == Modifiers::Shift) {
+            move = true;
+        } else if (workspace) {
+            auto const& source = workspace->boxes[index].dragSourceVolume;
+            move = !source.empty() &&
+                   _wcsicmp(source.c_str(), BetterPanelVolumeOf(folder).c_str()) == 0;
+        }
+        if (move && (args.AllowedOperations() & dt::DataPackageOperation::Move) !=
+                        dt::DataPackageOperation::Move) {
+            move = false;
+        }
+        move = target && move;
+        args.AcceptedOperation(!target ? dt::DataPackageOperation::None
+                               : move  ? dt::DataPackageOperation::Move
+                                       : dt::DataPackageOperation::Copy);
+        if (target) {
+            args.DragUIOverride().Caption(move ? L"Move here" : L"Copy here");
+        }
+        BetterPanelWorkspaceShowDrop(
+            workspace, target ? index : -1,
+            !target ? DROPEFFECT_NONE : move ? DROPEFFECT_MOVE : DROPEFFECT_COPY);
+        args.Handled(true);
+    });
+    root.DragLeave([workspaceOf](auto const&, mux::DragEventArgs const&) {
+        BetterPanelWorkspaceShowDrop(workspaceOf(), -1, DROPEFFECT_NONE);
+    });
+    root.Drop([workspaceOf, host, index](auto const&, mux::DragEventArgs const& args) {
+        BetterPanelWorkspaceShowDrop(workspaceOf(), -1, DROPEFFECT_NONE);
+        BetterPanelWorkspaceXamlDrop(host, index, args);
+        args.Handled(true);
+    });
+}
+
+void BetterPanelAppendStandInThumbnail(muxc::StackPanel const& host);
+
+// Builds a box's Better Panel: a XAML island holding a host named like
+// Explorer's Details-pane host, which the panel installer then fills.
+void BetterPanelWorkspaceCreateBox(BetterPanelWorkspace* workspace, int index) {
+    auto& box = workspace->boxes[index];
+    if (box.source) return;
+    try {
+        winrt::Microsoft::UI::WindowId parentId{};
+        if (!BetterPanelGetWindowId(workspace->host, parentId)) return;
+        muxh::DesktopWindowXamlSource source;
+        source.Initialize(parentId);
+        HWND island = BetterPanelGetWindowFromId(source.SiteBridge().WindowId());
+        if (!island) {
+            source.Close();
+            return;
+        }
+        // Preview-handler windows (HTML, Markdown, SVG) sit on top of the
+        // box as siblings of its island. Without clipping, the island paints
+        // over them; GDI-drawn previews such as HTML then never show.
+        SetWindowLongPtrW(island, GWL_STYLE,
+                          GetWindowLongPtrW(island, GWL_STYLE) | WS_CLIPSIBLINGS);
+        muxc::Grid root;
+        root.RequestedTheme(BetterPanelWorkspaceDark() ? mux::ElementTheme::Dark
+                                                       : mux::ElementTheme::Light);
+        if (auto brush = winrt::Microsoft::UI::Xaml::Application::Current()
+                             .Resources()
+                             .TryLookup(winrt::box_value(
+                                 L"SolidBackgroundFillColorBaseBrush"))
+                             .try_as<winrt::Microsoft::UI::Xaml::Media::Brush>()) {
+            root.Background(brush);
+        }
+        muxc::ScrollViewer scroll;
+        scroll.HorizontalScrollBarVisibility(muxc::ScrollBarVisibility::Disabled);
+        scroll.VerticalScrollBarVisibility(muxc::ScrollBarVisibility::Auto);
+        muxc::StackPanel host;
+        host.Name(L"DetailsViewThumbnail");
+        BetterPanelAppendStandInThumbnail(host);
+        scroll.Content(host);
+        root.Children().Append(scroll);
+        // A click anywhere in the box, even on a button, makes it the box
+        // that follows Explorer. Posted so the workspace may be gone by then.
+        HWND workspaceHost = workspace->host;
+        root.AddHandler(
+            mux::UIElement::PointerPressedEvent(),
+            winrt::box_value(mux::Input::PointerEventHandler(
+                [workspaceHost, index](auto const&, auto const&) {
+                    PostMessageW(workspaceHost, kBetterPanelWorkspaceClickMessage,
+                                 index, 0);
+                })),
+            true);
+        // Double-clicking the box (but not a control that uses double-clicks
+        // itself, such as text, buttons, sliders or media) takes the linked
+        // Explorer back to what the box shows.
+        root.AddHandler(
+            mux::UIElement::DoubleTappedEvent(),
+            winrt::box_value(mux::Input::DoubleTappedEventHandler(
+                [workspaceHost, index](auto const&,
+                                       mux::Input::DoubleTappedRoutedEventArgs const& args) {
+                    for (auto node = args.OriginalSource().try_as<mux::DependencyObject>();
+                         node; node = mux::Media::VisualTreeHelper::GetParent(node)) {
+                        if (node.try_as<muxp::ButtonBase>() ||
+                            node.try_as<muxc::TextBox>() ||
+                            node.try_as<muxc::RichEditBox>() ||
+                            node.try_as<muxc::PasswordBox>() ||
+                            node.try_as<muxp::RangeBase>() ||
+                            node.try_as<muxc::MediaPlayerElement>() ||
+                            node.try_as<muxc::ComboBox>()) {
+                            return;
+                        }
+                        if (auto text = node.try_as<muxc::TextBlock>();
+                            text && text.IsTextSelectionEnabled()) {
+                            return;  // double-click selects a word there
+                        }
+                    }
+                    PostMessageW(workspaceHost, kBetterPanelWorkspaceRevealMessage, index,
+                                 0);
+                })),
+            true);
+        BetterPanelWorkspaceBuildDropOverlay(box, root, workspaceHost, index);
+        source.Content(root);
+        box.source = source;
+        box.island = island;
+        BetterPanelInstallDetailPanel(host, nullptr);
+        std::shared_ptr<BetterPanelState> state;
+        {
+            std::lock_guard lock(g_betterPanelMutex);
+            for (auto const& candidate : g_betterPanels) {
+                if (candidate && candidate->host.get() == host) {
+                    state = candidate;
+                    break;
+                }
+            }
+        }
+        if (state) {
+            state->workspaceBox = true;
+            state->previewParentWindow = workspace->host;
+            state->previewClipWindow = island;
+            BetterPanelUpdateDetachButton(state.get());
+            box.panelState = state;
+            HWND linked = BetterPanelLinkedExplorer(workspace->state);
+            state->explorerWindow = linked ? linked : workspace->state->explorerWindow;
+            // A box shows what it showed last time; a new one starts with
+            // what Explorer has selected now.
+            if (BetterPanelWorkspaceLoadBox(index, state.get())) {
+                BetterPanelRefresh(state);
+                InvalidateRect(workspace->host, nullptr, FALSE);
+            } else {
+                BetterPanelWorkspaceUpdateBox(workspace, index);
+            }
+        }
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Workspace box error %08X: %s", ex.code(), ex.message().c_str());
+    } catch (...) {
+        Wh_Log(L"Workspace box error %08X", winrt::to_hresult().value);
+    }
+}
+
+void BetterPanelWorkspaceDestroyBox(BetterPanelWorkspaceBox& box) {
+    auto state = box.panelState.lock();
+    box.panelState.reset();
+    if (state && !state->unloaded) {
+        // The same teardown as a panel whose Explorer host unloads.
+        state->unloaded = true;
+        BetterPanelStopTextHandler(state.get());
+        BetterPanelDetachHostUnloadedHandler(state);
+        state->insightsGeneration.fetch_add(1, std::memory_order_relaxed);
+        BetterPanelStopStateTimers(state);
+        BetterPanelRemoveAnimationHandlers(state);
+        BetterPanelStopStateMedia(state);
+        BetterPanelRemoveNativePreviewControls(state);
+        BetterPanelUnwatchNativeDetailsVisibility(state);
+        std::lock_guard lock(g_betterPanelMutex);
+        std::erase_if(g_betterPanels,
+                      [&](auto const& item) { return item == state; });
+    }
+    if (box.source) {
+        try {
+            box.source.Content(nullptr);
+            box.source.Close();
+        } catch (...) {
+        }
+        box.source = nullptr;
+    }
+    box.island = nullptr;
+}
+
+void BetterPanelWorkspaceLayout(BetterPanelWorkspace* workspace) {
+    RECT client{};
+    GetClientRect(workspace->host, &client);
+    int toolbar = BetterPanelWorkspaceScale(workspace, 40);
+    int header = BetterPanelWorkspaceScale(workspace, 32);
+    int gap = BetterPanelWorkspaceScale(workspace, 6);
+    workspace->area = {0, toolbar, client.right,
+                       std::max(toolbar, static_cast<int>(client.bottom))};
+    RECT const& a = workspace->area;
+    int width = a.right - a.left;
+    int height = a.bottom - a.top;
+    int splitX = a.left + static_cast<int>(width * workspace->splitX);
+    int splitY = a.top + static_cast<int>(height * workspace->splitY);
+    workspace->dividerX = {};
+    workspace->dividerY = {};
+    RECT cells[4]{};
+    switch (workspace->layout) {
+        case 2:
+            cells[0] = {a.left, a.top, splitX - gap / 2, a.bottom};
+            cells[1] = {splitX + gap - gap / 2, a.top, a.right, a.bottom};
+            workspace->dividerX = {splitX - gap / 2, a.top, splitX + gap - gap / 2, a.bottom};
+            break;
+        case 3:
+            cells[0] = {a.left, a.top, a.right, splitY - gap / 2};
+            cells[1] = {a.left, splitY + gap - gap / 2, a.right, a.bottom};
+            workspace->dividerY = {a.left, splitY - gap / 2, a.right, splitY + gap - gap / 2};
+            break;
+        case 4:
+            cells[0] = {a.left, a.top, splitX - gap / 2, splitY - gap / 2};
+            cells[1] = {splitX + gap - gap / 2, a.top, a.right, splitY - gap / 2};
+            cells[2] = {a.left, splitY + gap - gap / 2, splitX - gap / 2, a.bottom};
+            cells[3] = {splitX + gap - gap / 2, splitY + gap - gap / 2, a.right, a.bottom};
+            workspace->dividerX = {splitX - gap / 2, a.top, splitX + gap - gap / 2, a.bottom};
+            workspace->dividerY = {a.left, splitY - gap / 2, a.right, splitY + gap - gap / 2};
+            break;
+        default:
+            cells[0] = a;
+            break;
+    }
+    int count = BetterPanelWorkspaceBoxCount(workspace);
+    for (int i = 0; i < 4; ++i) {
+        auto& box = workspace->boxes[i];
+        if (i >= count) {
+            if (box.island) ShowWindow(box.island, SW_HIDE);
+            continue;
+        }
+        RECT cell = cells[i];
+        box.header = {cell.left, cell.top, cell.right,
+                      std::min(cell.bottom, cell.top + header)};
+        box.panel = {cell.left, box.header.bottom, cell.right,
+                     std::max(box.header.bottom, cell.bottom)};
+        if (!box.source) BetterPanelWorkspaceCreateBox(workspace, i);
+        if (box.island) {
+            MoveWindow(box.island, box.panel.left, box.panel.top,
+                       box.panel.right - box.panel.left,
+                       box.panel.bottom - box.panel.top, TRUE);
+            ShowWindow(box.island, SW_SHOWNA);
+        }
+    }
+    InvalidateRect(workspace->host, nullptr, FALSE);
+}
+
+// Clicking a box selects it and makes it the box that follows Explorer; the
+// others stop following. It keeps what it shows until Explorer's selection
+// next changes. A locked box is only selected.
+void BetterPanelWorkspaceSelect(BetterPanelWorkspace* workspace, int index) {
+    if (index < 0 || index >= BetterPanelWorkspaceBoxCount(workspace)) return;
+    bool changed = workspace->active != index;
+    workspace->active = index;
+    if (!workspace->boxes[index].locked && !workspace->boxes[index].follow) {
+        for (int i = 0; i < 4; ++i) workspace->boxes[i].follow = i == index;
+        workspace->seen = BetterPanelWorkspaceExplorerSignature(workspace);
+        changed = true;
+    }
+    if (!changed) return;
+    BetterPanelWorkspaceSave(workspace);
+    InvalidateRect(workspace->host, nullptr, FALSE);
+}
+
+// The pop-out's half-second tick: when the selection in the linked Explorer
+// window changes, every shown box with Follow on catches up. Boxes without
+// Follow keep what they show, whether locked or not.
+void BetterPanelWorkspaceTick(BetterPanelWorkspace* workspace) {
+    if (!workspace) return;
+    int count = BetterPanelWorkspaceBoxCount(workspace);
+    bool anyFollowing = false;
+    for (int i = 0; i < count; ++i) {
+        auto const& box = workspace->boxes[i];
+        anyFollowing |= box.follow && !box.locked;
+    }
+    if (!anyFollowing) return;
+    auto signature = BetterPanelWorkspaceExplorerSignature(workspace);
+    if (!signature || signature == workspace->seen) return;
+    workspace->seen = signature;
+    for (int i = 0; i < count; ++i) {
+        auto const& box = workspace->boxes[i];
+        if (box.follow && !box.locked) BetterPanelWorkspaceUpdateBox(workspace, i);
+    }
+}
+
+struct BetterPanelWorkspaceColors {
+    COLORREF background, toolbar, header, text, secondary, hover, accent,
+        divider, accentText;
+};
+
+BetterPanelWorkspaceColors BetterPanelGetWorkspaceColors(bool dark) {
+    if (dark) {
+        return {RGB(0x20, 0x20, 0x20), RGB(0x2B, 0x2B, 0x2B),
+                RGB(0x27, 0x27, 0x27), RGB(0xF2, 0xF2, 0xF2),
+                RGB(0x9D, 0x9D, 0x9D), RGB(0x3A, 0x3A, 0x3A),
+                RGB(0x60, 0xCD, 0xFF), RGB(0x3A, 0x3A, 0x3A),
+                RGB(0x00, 0x00, 0x00)};
+    }
+    return {RGB(0xF3, 0xF3, 0xF3), RGB(0xEE, 0xEE, 0xEE), RGB(0xFA, 0xFA, 0xFA),
+            RGB(0x1B, 0x1B, 0x1B), RGB(0x5F, 0x5F, 0x5F), RGB(0xE1, 0xE1, 0xE1),
+            RGB(0x00, 0x5F, 0xB8), RGB(0xDD, 0xDD, 0xDD),
+            RGB(0xFF, 0xFF, 0xFF)};
+}
+
+void BetterPanelWorkspaceFill(HDC dc, RECT const& rect, COLORREF color) {
+    SetDCBrushColor(dc, color);
+    FillRect(dc, &rect, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+}
+
+void BetterPanelWorkspaceRound(HDC dc, RECT const& rect, COLORREF color,
+                               int radius) {
+    HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(DC_BRUSH));
+    HGDIOBJ oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+    SetDCBrushColor(dc, color);
+    RoundRect(dc, rect.left, rect.top, rect.right + 1, rect.bottom + 1,
+              radius, radius);
+    SelectObject(dc, oldBrush);
+    SelectObject(dc, oldPen);
+}
+
+// What a box is showing, for its header.
+std::wstring BetterPanelWorkspaceBoxTitle(BetterPanelWorkspaceBox const& box,
+                                          std::wstring* path) {
+    auto state = BetterPanelWorkspaceBoxState(box);
+    std::wstring shown = state ? state->selectedPath : std::wstring();
+    if (path) *path = shown;
+    if (shown.empty()) return L"Home";
+    auto name = BetterPanelFileName(shown);
+    return name.empty() ? shown : name;
+}
+
+void BetterPanelWorkspacePaint(BetterPanelWorkspace* workspace, HDC dc,
+                               RECT const& client) {
+    bool dark = BetterPanelWorkspaceDark();
+    auto colors = BetterPanelGetWorkspaceColors(dark);
+    auto scale = [&](int value) { return BetterPanelWorkspaceScale(workspace, value); };
+    workspace->hits.clear();
+    BetterPanelWorkspaceFill(dc, client, colors.background);
+    HFONT font = CreateFontW(-scale(12), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+                             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH, L"Segoe UI Variable Text");
+    HFONT bold = CreateFontW(-scale(12), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE,
+                             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH, L"Segoe UI Variable Text");
+    HFONT icons = CreateFontW(-scale(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+                              FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                              DEFAULT_PITCH, L"Segoe Fluent Icons");
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+
+    auto drawText = [&](std::wstring const& text, RECT rect, HFONT with,
+                        COLORREF color, UINT format) {
+        SelectObject(dc, with);
+        SetTextColor(dc, color);
+        DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &rect,
+                  format | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    };
+    auto textWidth = [&](std::wstring const& text, HFONT with) {
+        SelectObject(dc, with);
+        SIZE size{};
+        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()),
+                              &size);
+        return static_cast<int>(size.cx);
+    };
+    // Buttons are hit-tested in the order they are added, so a header's
+    // buttons go in before the header itself.
+    auto button = [&](RECT rect, wchar_t glyph, std::wstring const& label,
+                      int action, int box, int arg, bool on) {
+        workspace->hits.push_back({rect, action, box, arg});
+        int index = static_cast<int>(workspace->hits.size()) - 1;
+        if (on) {
+            BetterPanelWorkspaceRound(dc, rect, colors.accent, scale(8));
+        } else if (index == workspace->hover) {
+            BetterPanelWorkspaceRound(dc, rect, colors.hover, scale(8));
+        }
+        COLORREF ink = on ? colors.accentText : colors.text;
+        RECT inner = rect;
+        if (glyph) {
+            RECT icon = inner;
+            if (!label.empty()) icon.right = icon.left + scale(30);
+            drawText(std::wstring(1, glyph), icon, icons, ink, DT_CENTER);
+            inner.left = icon.right;
+        }
+        if (!label.empty()) {
+            inner.left += glyph ? 0 : scale(10);
+            drawText(label, inner, font, ink, DT_LEFT);
+        }
+    };
+
+    // Toolbar.
+    RECT toolbar{0, 0, client.right, workspace->area.top};
+    BetterPanelWorkspaceFill(dc, toolbar, colors.toolbar);
+    int pad = scale(6);
+    int height = toolbar.bottom - pad * 2;
+    int x = pad;
+    for (int layout = 1; layout <= 4; ++layout) {
+        RECT rect{x, pad, x + height, pad + height};
+        workspace->hits.push_back({rect, kWorkspaceLayout, -1, layout});
+        int index = static_cast<int>(workspace->hits.size()) - 1;
+        bool on = workspace->layout == layout;
+        if (on) {
+            BetterPanelWorkspaceRound(dc, rect, colors.accent, scale(8));
+        } else if (index == workspace->hover) {
+            BetterPanelWorkspaceRound(dc, rect, colors.hover, scale(8));
+        }
+        // A small picture of the layout.
+        COLORREF ink = on ? colors.accentText : colors.text;
+        int m = scale(8);
+        RECT r{rect.left + m, rect.top + m, rect.right - m, rect.bottom - m};
+        HPEN pen = CreatePen(PS_SOLID, std::max(1, scale(1)), ink);
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Rectangle(dc, r.left, r.top, r.right, r.bottom);
+        int cx = (r.left + r.right) / 2;
+        int cy = (r.top + r.bottom) / 2;
+        if (layout == 2 || layout == 4) {
+            MoveToEx(dc, cx, r.top, nullptr);
+            LineTo(dc, cx, r.bottom);
+        }
+        if (layout == 3 || layout == 4) {
+            MoveToEx(dc, r.left, cy, nullptr);
+            LineTo(dc, r.right, cy);
+        }
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
+        x += height + scale(2);
+    }
+    x += scale(10);
+    HWND linked = BetterPanelLinkedExplorer(workspace->state);
+    std::wstring linkLabel = linked ? L"Linked: " + BetterPanelWindowTitle(linked)
+                                    : std::wstring(L"Not linked - choose a window");
+    int linkWidth = std::min(textWidth(linkLabel, font) + scale(46),
+                             std::max(0, static_cast<int>(client.right) - x - pad));
+    if (linkWidth > scale(60)) {
+        RECT rect{client.right - pad - linkWidth, pad, client.right - pad,
+                  pad + height};
+        button(rect, 0xE71B, linkLabel, kWorkspaceLink, -1, 0, false);
+    }
+
+    // Box headers.
+    int count = BetterPanelWorkspaceBoxCount(workspace);
+    int selected = std::min(workspace->active, count - 1);
+    for (int i = 0; i < count; ++i) {
+        auto& box = workspace->boxes[i];
+        RECT header = box.header;
+        BetterPanelWorkspaceFill(dc, header, colors.header);
+        if (i == workspace->dropBox) {
+            // Files dragged over this header drop into the box's folder.
+            RECT inset = header;
+            InflateRect(&inset, -scale(2), -scale(2));
+            BetterPanelWorkspaceRound(dc, inset, colors.accent, scale(8));
+            RECT inner = inset;
+            InflateRect(&inner, -scale(2), -scale(2));
+            BetterPanelWorkspaceRound(dc, inner, colors.hover, scale(6));
+        }
+        if (count > 1 && i == selected) {
+            RECT mark{header.left, header.bottom - scale(2), header.right,
+                      header.bottom};
+            BetterPanelWorkspaceFill(dc, mark, colors.accent);
+        }
+        int buttonSize = header.bottom - header.top - scale(4);
+        int right = header.right - scale(4);
+        auto headerButton = [&](wchar_t glyph, int action, bool on) {
+            RECT rect{right - buttonSize, header.top + scale(2), right,
+                      header.top + scale(2) + buttonSize};
+            button(rect, glyph, L"", action, i, 0, on);
+            right -= buttonSize + scale(2);
+        };
+        headerButton(0xE712, kWorkspaceMore, false);
+        headerButton(box.locked ? 0xE72E : 0xE785, kWorkspaceLock, box.locked);
+        {
+            // Follow switch: on, this box changes with Explorer's selection.
+            bool following = box.follow && !box.locked;
+            std::wstring label = following ? L"Following" : L"Follow";
+            int width = textWidth(label, font) + scale(42);
+            if (right - width > header.left + scale(90)) {
+                RECT rect{right - width, header.top + scale(2), right,
+                          header.top + scale(2) + buttonSize};
+                button(rect, 0xE895, label, kWorkspaceFollow, i, 0, following);
+                right = rect.left - scale(2);
+            } else {
+                headerButton(0xE895, kWorkspaceFollow, following);
+            }
+        }
+        std::wstring path;
+        std::wstring title = BetterPanelWorkspaceBoxTitle(box, &path);
+        RECT icon{header.left + scale(6), header.top, header.left + scale(30),
+                  header.bottom};
+        drawText(std::wstring(1, wchar_t(box.locked ? 0xE72E : 0xE8A0)), icon,
+                 icons, colors.text, DT_CENTER);
+        int titleWidth = std::min(textWidth(title, bold),
+                                  std::max(0, right - static_cast<int>(icon.right) - scale(8)));
+        RECT titleRect{icon.right + scale(2), header.top,
+                       icon.right + scale(2) + titleWidth, header.bottom};
+        drawText(title, titleRect, bold, colors.text, DT_LEFT | DT_END_ELLIPSIS);
+        RECT pathRect{titleRect.right + scale(10), header.top, right - scale(6),
+                      header.bottom};
+        if (pathRect.right > pathRect.left + scale(30)) {
+            drawText(path, pathRect, font, colors.secondary,
+                     DT_LEFT | DT_PATH_ELLIPSIS);
+        }
+        // Clicking anywhere else on the header selects the box.
+        workspace->hits.push_back({header, kWorkspaceSelect, i, 0});
+    }
+    if (!IsRectEmpty(&workspace->dividerX)) {
+        BetterPanelWorkspaceFill(dc, workspace->dividerX, colors.divider);
+    }
+    if (!IsRectEmpty(&workspace->dividerY)) {
+        BetterPanelWorkspaceFill(dc, workspace->dividerY, colors.divider);
+    }
+    SelectObject(dc, oldFont);
+    DeleteObject(font);
+    DeleteObject(bold);
+    DeleteObject(icons);
+}
+
+void BetterPanelApplyWorkspaceMode(BetterPanelState* state);
+void BetterPanelLayoutWorkspaceWindow(BetterPanelState* state);
+
+void BetterPanelWorkspaceCopyText(HWND owner, std::wstring const& text) {
+    if (text.empty() || !OpenClipboard(owner)) return;
+    EmptyClipboard();
+    size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+    if (HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+        if (void* data = GlobalLock(memory)) {
+            memcpy(data, text.c_str(), bytes);
+            GlobalUnlock(memory);
+            if (!SetClipboardData(CF_UNICODETEXT, memory)) GlobalFree(memory);
+        } else {
+            GlobalFree(memory);
+        }
+    }
+    CloseClipboard();
+}
+
+// Shows |path| in the linked Explorer window: a folder opens there, a file
+// opens its folder.
+void BetterPanelShowInLinkedExplorer(BetterPanelState* state, HWND owner,
+                                     std::wstring const& path) {
+    if (path.empty()) return;
+    std::wstring folder = path;
+    DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes != INVALID_FILE_ATTRIBUTES &&
+        !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+        size_t slash = folder.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) folder.resize(slash);
+        if (folder.size() == 2 && folder[1] == L':') folder += L'\\';
+    }
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(SHParseDisplayName(folder.c_str(), nullptr, &pidl, 0, nullptr)) ||
+        !pidl) {
+        return;
+    }
+    bool shown = false;
+    if (HWND linked = BetterPanelLinkedExplorer(state)) {
+        auto browser = BetterPanelExplorerTabBrowser(linked);
+        shown = browser && SUCCEEDED(browser->BrowseObject(
+                               pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE));
+        if (shown) SetForegroundWindow(linked);
+    }
+    if (!shown) {
+        SHELLEXECUTEINFOW info{sizeof(info)};
+        info.fMask = SEE_MASK_IDLIST;
+        info.hwnd = owner;
+        info.lpVerb = L"open";
+        info.lpIDList = pidl;
+        info.nShow = SW_SHOWNORMAL;
+        ShellExecuteExW(&info);
+    }
+    CoTaskMemFree(pidl);
+}
+
+bool BetterPanelPathsEqual(std::wstring const& left, std::wstring const& right);
+
+// Double-clicking a box takes the linked Explorer window back to what the box
+// shows: its folder, with the box's items selected (Home for a Home box).
+// Explorer loads the folder asynchronously, so the selection is applied from
+// a short timer once its view shows that folder.
+void BetterPanelWorkspaceReveal(BetterPanelWorkspace* workspace, int index) {
+    if (index < 0 || index >= BetterPanelWorkspaceBoxCount(workspace)) return;
+    auto state = BetterPanelWorkspaceBoxState(workspace->boxes[index]);
+    HWND linked = BetterPanelLinkedExplorer(workspace->state);
+    if (!state || !linked) return;
+    std::wstring folder = state->workspaceHome ? std::wstring() : state->workspaceFolder;
+    // Home's namespace folder when the box shows Home.
+    std::wstring target = folder.empty()
+        ? std::wstring(L"shell:::{f874310e-b6b7-47dc-bc84-b9e6b38f5903}")
+        : folder;
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    if (FAILED(SHParseDisplayName(target.c_str(), nullptr, &pidl, 0, nullptr)) ||
+        !pidl) {
+        return;
+    }
+    auto browser = BetterPanelExplorerTabBrowser(linked);
+    bool browsed = browser && SUCCEEDED(browser->BrowseObject(
+                                  pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE));
+    CoTaskMemFree(pidl);
+    if (!browsed) return;
+    if (IsIconic(linked)) ShowWindow(linked, SW_RESTORE);
+    SetForegroundWindow(linked);
+    workspace->revealFolder = folder;
+    workspace->revealPaths = folder.empty() ? std::vector<std::wstring>()
+                                            : state->workspacePaths;
+    workspace->revealTries = 0;
+    if (!workspace->revealPaths.empty()) {
+        SetTimer(workspace->host, kBetterPanelWorkspaceRevealTimer, 150, nullptr);
+    }
+}
+
+// Selects the revealed items once the linked Explorer shows their folder.
+void BetterPanelWorkspaceRevealTick(BetterPanelWorkspace* workspace) {
+    // Keep trying until Explorer has really selected the items (a slow drive
+    // can take a while to list the folder), for up to 15 seconds.
+    bool done = ++workspace->revealTries > 100;
+    HWND linked = BetterPanelLinkedExplorer(workspace->state);
+    auto browser = linked ? BetterPanelExplorerTabBrowser(linked) : nullptr;
+    winrt::com_ptr<IShellView> view;
+    winrt::com_ptr<IFolderView2> folderView;
+    if (!done && browser && SUCCEEDED(browser->QueryActiveShellView(view.put())) &&
+        view && SUCCEEDED(view->QueryInterface(IID_PPV_ARGS(folderView.put())))) {
+        winrt::com_ptr<IShellItem> shown;
+        PWSTR name = nullptr;
+        bool arrived = SUCCEEDED(folderView->GetFolder(IID_PPV_ARGS(shown.put()))) &&
+                       shown &&
+                       SUCCEEDED(shown->GetDisplayName(SIGDN_FILESYSPATH, &name)) &&
+                       name && BetterPanelPathsEqual(name, workspace->revealFolder);
+        CoTaskMemFree(name);
+        if (arrived) {
+            // The folder is there, but its items may still be listing: select
+            // them, then check Explorer really selected them all; if not,
+            // try again on the next tick.
+            bool first = true;
+            int wanted = 0;
+            for (auto const& path : workspace->revealPaths) {
+                PIDLIST_ABSOLUTE item = nullptr;
+                if (FAILED(SHParseDisplayName(path.c_str(), nullptr, &item, 0,
+                                              nullptr)) ||
+                    !item) {
+                    continue;  // deleted since; nothing to select
+                }
+                UINT flags = SVSI_SELECT | SVSI_ENSUREVISIBLE;
+                if (first) flags |= SVSI_DESELECTOTHERS | SVSI_FOCUSED;
+                view->SelectItem(ILFindLastID(item), flags);
+                first = false;
+                ++wanted;
+                CoTaskMemFree(item);
+            }
+            int selected = 0;
+            folderView->ItemCount(SVGIO_SELECTION, &selected);
+            done = selected >= wanted;
+        }
+    } else {
+        done = done || !browser;
+    }
+    if (done) {
+        KillTimer(workspace->host, kBetterPanelWorkspaceRevealTimer);
+        workspace->revealPaths.clear();
+    }
+}
+
+void BetterPanelWorkspaceMoreMenu(BetterPanelWorkspace* workspace, int index,
+                                  POINT point) {
+    std::wstring path;
+    BetterPanelWorkspaceBoxTitle(workspace->boxes[index], &path);
+    HWND root = GetAncestor(workspace->host, GA_ROOT);
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+    UINT pathFlags = path.empty() ? MF_GRAYED : 0;
+    AppendMenuW(menu, MF_STRING | (workspace->boxes[index].locked ? MF_GRAYED : 0),
+                1, L"Show what Explorer has selected now");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING | pathFlags, 2, L"Show in linked Explorer");
+    AppendMenuW(menu, MF_STRING | pathFlags, 3, L"Copy path");
+    SetForegroundWindow(root);
+    UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY,
+                                    point.x, point.y, root, nullptr);
+    DestroyMenu(menu);
+    switch (command) {
+        case 1:
+            BetterPanelWorkspaceUpdateBox(workspace, index);
+            break;
+        case 2:
+            BetterPanelShowInLinkedExplorer(workspace->state, root, path);
+            break;
+        case 3:
+            BetterPanelWorkspaceCopyText(root, path);
+            break;
+    }
+}
+
+void BetterPanelWorkspaceRun(BetterPanelWorkspace* workspace,
+                             BetterPanelWorkspaceHit const& hit) {
+    POINT below{hit.rect.left, hit.rect.bottom};
+    ClientToScreen(workspace->host, &below);
+    if (hit.box >= 0 && hit.action != kWorkspaceMore &&
+        hit.action != kWorkspaceFollow && hit.action != kWorkspaceLock) {
+        BetterPanelWorkspaceSelect(workspace, hit.box);
+    }
+    switch (hit.action) {
+        case kWorkspaceLayout:
+            workspace->layout = hit.arg;
+            BetterPanelWorkspaceLayout(workspace);
+            BetterPanelWorkspaceSave(workspace);
+            break;
+        case kWorkspaceFollow: {
+            auto& box = workspace->boxes[hit.box];
+            workspace->active = hit.box;
+            box.follow = !(box.follow && !box.locked);
+            if (box.follow) {
+                // Turning Follow on unlocks the box, takes Follow from the
+                // others and shows Explorer's selection straight away.
+                for (int i = 0; i < 4; ++i) {
+                    if (i != hit.box) workspace->boxes[i].follow = false;
+                }
+                box.locked = false;
+                BetterPanelWorkspaceUpdateBox(workspace, hit.box);
+                workspace->seen = BetterPanelWorkspaceExplorerSignature(workspace);
+            }
+            BetterPanelWorkspaceSave(workspace);
+            break;
+        }
+        case kWorkspaceLink:
+            if (HWND chosen = BetterPanelPickExplorerWindow(
+                    workspace->state, workspace->host, below)) {
+                BetterPanelSetLinkedExplorer(workspace->state, chosen);
+                workspace->seen = BetterPanelWorkspaceExplorerSignature(workspace);
+            }
+            break;
+        case kWorkspaceLock:
+            // Locking turns Follow off; unlocking leaves Follow off, so the
+            // box keeps what it shows until Follow is turned on again.
+            workspace->boxes[hit.box].locked = !workspace->boxes[hit.box].locked;
+            if (workspace->boxes[hit.box].locked) workspace->boxes[hit.box].follow = false;
+            BetterPanelWorkspaceSave(workspace);
+            break;
+        case kWorkspaceMore:
+            BetterPanelWorkspaceMoreMenu(workspace, hit.box, below);
+            break;
+    }
+    InvalidateRect(workspace->host, nullptr, FALSE);
+}
+
+// The folder a drop on box |index|'s header goes into: the folder the box
+// shows, or the one folder selected in it. Home and virtual places take none.
+std::wstring BetterPanelWorkspaceDropFolder(BetterPanelWorkspace* workspace,
+                                            int index) {
+    if (index < 0 || index >= BetterPanelWorkspaceBoxCount(workspace)) return {};
+    auto state = BetterPanelWorkspaceBoxState(workspace->boxes[index]);
+    if (!state || state->workspaceHome) return {};
+    auto isFolder = [](std::wstring const& path) {
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        return attributes != INVALID_FILE_ATTRIBUTES &&
+               (attributes & FILE_ATTRIBUTE_DIRECTORY);
+    };
+    if (state->workspacePaths.size() == 1 && isFolder(state->workspacePaths[0])) {
+        return state->workspacePaths[0];
+    }
+    return isFolder(state->workspaceFolder) ? state->workspaceFolder : std::wstring();
+}
+
+// The box whose header is at |point| (client coordinates), or -1.
+int BetterPanelWorkspaceHeaderAt(BetterPanelWorkspace* workspace, POINT point) {
+    for (int i = 0; i < BetterPanelWorkspaceBoxCount(workspace); ++i) {
+        if (PtInRect(&workspace->boxes[i].header, point)) return i;
+    }
+    return -1;
+}
+
+// From shlguid.h, which clashes with knownfolders.h here.
+constexpr GUID kBetterPanelClsidDragDropHelper{
+    0x4657278A, 0x411B, 0x11D2, {0x83, 0x9A, 0x00, 0xC0, 0x4F, 0xD9, 0x18, 0xD0}};
+constexpr GUID kBetterPanelBhidSFUIObject{
+    0x3981E225, 0xF559, 0x11D3, {0x8E, 0x3A, 0x00, 0xC0, 0x4F, 0x68, 0x37, 0xD5}};
+constexpr GUID kBetterPanelBhidDataObject{
+    0xB8C0BD9F, 0xED24, 0x455C, {0x83, 0xE6, 0xD5, 0x39, 0x0C, 0x4F, 0xE8, 0xC4}};
+
+// Box headers take files dragged from Explorer, the desktop or another box.
+// The drop is handed to the box folder's own Shell drop target, so Windows
+// picks Move or Copy, honours Ctrl/Shift/Alt and shows its usual progress and
+// conflict dialogs.
+class BetterPanelWorkspaceDropTarget final : public IDropTarget {
+   public:
+    explicit BetterPanelWorkspaceDropTarget(BetterPanelWorkspace* workspace)
+        : workspace_(workspace) {
+        CoCreateInstance(kBetterPanelClsidDragDropHelper, nullptr, CLSCTX_INPROC_SERVER,
+                         IID_PPV_ARGS(helper_.put()));
+    }
+    void Detach() {
+        Leave();
+        workspace_ = nullptr;
+    }
+
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDropTarget) {
+            *object = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    IFACEMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+    IFACEMETHODIMP_(ULONG) Release() override {
+        ULONG refs = --refs_;
+        if (!refs) delete this;
+        return refs;
+    }
+
+    IFACEMETHODIMP DragEnter(IDataObject* data, DWORD keys, POINTL point,
+                             DWORD* effect) override {
+        data_.copy_from(data);
+        if (helper_ && workspace_) {
+            POINT pt{point.x, point.y};
+            helper_->DragEnter(workspace_->host, data, &pt, *effect);
+        }
+        return Over(keys, point, effect);
+    }
+    IFACEMETHODIMP DragOver(DWORD keys, POINTL point, DWORD* effect) override {
+        HRESULT hr = Over(keys, point, effect);
+        if (helper_) {
+            POINT pt{point.x, point.y};
+            helper_->DragOver(&pt, *effect);
+        }
+        return hr;
+    }
+    IFACEMETHODIMP DragLeave() override {
+        if (helper_) helper_->DragLeave();
+        Leave();
+        return S_OK;
+    }
+    IFACEMETHODIMP Drop(IDataObject* data, DWORD keys, POINTL point,
+                        DWORD* effect) override {
+        Over(keys, point, effect);
+        if (helper_) {
+            POINT pt{point.x, point.y};
+            helper_->Drop(data, &pt, *effect);
+        }
+        HRESULT hr = S_OK;
+        if (target_) {
+            hr = target_->Drop(data, keys, point, effect);
+            target_ = nullptr;
+        } else {
+            *effect = DROPEFFECT_NONE;
+        }
+        Leave();
+        return hr;
+    }
+
+   private:
+    ~BetterPanelWorkspaceDropTarget() = default;
+
+    void SetHighlight(int box) {
+        if (!workspace_ || workspace_->dropBox == box) return;
+        workspace_->dropBox = box;
+        InvalidateRect(workspace_->host, nullptr, FALSE);
+    }
+    void Leave() {
+        if (target_) target_->DragLeave();
+        target_ = nullptr;
+        box_ = -1;
+        data_ = nullptr;
+        SetHighlight(-1);
+        if (workspace_) BetterPanelWorkspaceShowDrop(workspace_, -1, DROPEFFECT_NONE);
+    }
+    HRESULT Over(DWORD keys, POINTL point, DWORD* effect) {
+        DWORD allowed = *effect;
+        *effect = DROPEFFECT_NONE;
+        if (!workspace_) return S_OK;
+        POINT client{point.x, point.y};
+        ScreenToClient(workspace_->host, &client);
+        // Anywhere on a box takes the drop: its header or its panel.
+        int box = BetterPanelWorkspaceHeaderAt(workspace_, client);
+        for (int i = 0; box < 0 && i < BetterPanelWorkspaceBoxCount(workspace_); ++i) {
+            if (PtInRect(&workspace_->boxes[i].panel, client)) box = i;
+        }
+        if (box != box_) {
+            if (target_) target_->DragLeave();
+            target_ = nullptr;
+            box_ = box;
+            std::wstring folder = BetterPanelWorkspaceDropFolder(workspace_, box);
+            winrt::com_ptr<IShellItem> item;
+            if (!folder.empty() && data_ &&
+                SUCCEEDED(SHCreateItemFromParsingName(folder.c_str(), nullptr,
+                                                      IID_PPV_ARGS(item.put())))) {
+                item->BindToHandler(nullptr, kBetterPanelBhidSFUIObject,
+                                    IID_PPV_ARGS(target_.put()));
+            }
+            if (target_) {
+                DWORD entered = allowed;
+                if (FAILED(target_->DragEnter(data_.get(), keys, point, &entered))) {
+                    target_ = nullptr;
+                }
+            }
+        }
+        SetHighlight(target_ ? box_ : -1);
+        if (!target_) {
+            BetterPanelWorkspaceShowDrop(workspace_, -1, DROPEFFECT_NONE);
+            return S_OK;
+        }
+        *effect = allowed;
+        HRESULT hr = target_->DragOver(keys, point, effect);
+        BetterPanelWorkspaceShowDrop(workspace_, box_, *effect);
+        return hr;
+    }
+
+    std::atomic<ULONG> refs_{1};
+    BetterPanelWorkspace* workspace_;
+    winrt::com_ptr<IDropTargetHelper> helper_;
+    winrt::com_ptr<IDataObject> data_;
+    winrt::com_ptr<IDropTarget> target_;
+    int box_ = -1;
+};
+
+// Drags what a box shows (its items, or its folder) out of its header to
+// Explorer, the desktop, another box or any app that takes files.
+void BetterPanelWorkspaceDragOut(BetterPanelWorkspace* workspace, int index) {
+    auto state = BetterPanelWorkspaceBoxState(workspace->boxes[index]);
+    if (!state || state->workspaceHome) return;
+    std::vector<std::wstring> paths = state->workspacePaths;
+    if (paths.empty() && !state->workspaceFolder.empty()) {
+        paths.push_back(state->workspaceFolder);
+    }
+    std::vector<PIDLIST_ABSOLUTE> pidls;
+    for (auto const& path : paths) {
+        PIDLIST_ABSOLUTE pidl = nullptr;
+        if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, nullptr)) &&
+            pidl) {
+            pidls.push_back(pidl);
+        }
+    }
+    std::vector<PCIDLIST_ABSOLUTE> list(pidls.begin(), pidls.end());
+    winrt::com_ptr<IShellItemArray> items;
+    winrt::com_ptr<IDataObject> data;
+    if (!list.empty() &&
+        SUCCEEDED(SHCreateShellItemArrayFromIDLists(
+            static_cast<UINT>(list.size()), list.data(), items.put()))) {
+        items->BindToHandler(nullptr, kBetterPanelBhidDataObject,
+                             IID_PPV_ARGS(data.put()));
+    }
+    for (auto pidl : pidls) CoTaskMemFree(pidl);
+    if (!data) return;
+    DWORD effect = DROPEFFECT_NONE;
+    SHDoDragDrop(workspace->host, data.get(), nullptr,
+                 DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+}
+
+int BetterPanelWorkspaceHitAt(BetterPanelWorkspace* workspace, POINT point) {
+    for (size_t i = 0; i < workspace->hits.size(); ++i) {
+        if (PtInRect(&workspace->hits[i].rect, point)) return static_cast<int>(i);
+    }
+    return -1;
+}
+
+LRESULT BetterPanelWorkspaceProc(BetterPanelWorkspace* workspace, HWND window,
+                                 UINT message, WPARAM wParam, LPARAM lParam) {
+    POINT point{static_cast<short>(LOWORD(lParam)),
+                static_cast<short>(HIWORD(lParam))};
+    switch (message) {
+        case kBetterPanelWorkspaceClickMessage:
+            BetterPanelWorkspaceSelect(workspace, static_cast<int>(wParam));
+            return 0;
+        case kBetterPanelWorkspaceRevealMessage:
+            BetterPanelWorkspaceReveal(workspace, static_cast<int>(wParam));
+            return 0;
+        case WM_TIMER:
+            if (wParam == kBetterPanelWorkspaceRevealTimer) {
+                BetterPanelWorkspaceRevealTick(workspace);
+                return 0;
+            }
+            break;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_SIZE:
+            BetterPanelWorkspaceLayout(workspace);
+            return 0;
+        case WM_PAINT: {
+            PAINTSTRUCT ps{};
+            HDC dc = BeginPaint(window, &ps);
+            RECT client{};
+            GetClientRect(window, &client);
+            HDC memory = CreateCompatibleDC(dc);
+            HBITMAP bitmap = CreateCompatibleBitmap(dc, std::max(1L, client.right),
+                                                    std::max(1L, client.bottom));
+            HGDIOBJ old = SelectObject(memory, bitmap);
+            BetterPanelWorkspacePaint(workspace, memory, client);
+            BitBlt(dc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
+            SelectObject(memory, old);
+            DeleteObject(bitmap);
+            DeleteDC(memory);
+            EndPaint(window, &ps);
+            return 0;
+        }
+        case WM_SETCURSOR: {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            ScreenToClient(window, &cursor);
+            if (PtInRect(&workspace->dividerX, cursor) &&
+                PtInRect(&workspace->dividerY, cursor)) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEALL));
+                return TRUE;
+            }
+            if (PtInRect(&workspace->dividerX, cursor)) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZEWE));
+                return TRUE;
+            }
+            if (PtInRect(&workspace->dividerY, cursor)) {
+                SetCursor(LoadCursorW(nullptr, IDC_SIZENS));
+                return TRUE;
+            }
+            break;
+        }
+        case WM_MOUSEMOVE: {
+            if (workspace->dragging) {
+                RECT const& a = workspace->area;
+                if (workspace->dragging & 1) {
+                    workspace->splitX = std::clamp(
+                        double(point.x - a.left) / std::max(1L, a.right - a.left),
+                        0.15, 0.85);
+                }
+                if (workspace->dragging & 2) {
+                    workspace->splitY = std::clamp(
+                        double(point.y - a.top) / std::max(1L, a.bottom - a.top),
+                        0.15, 0.85);
+                }
+                BetterPanelWorkspaceLayout(workspace);
+                return 0;
+            }
+            int hover = BetterPanelWorkspaceHitAt(workspace, point);
+            if (hover != workspace->hover) {
+                workspace->hover = hover;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            if (!workspace->tracking) {
+                TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, window, 0};
+                workspace->tracking = TrackMouseEvent(&track) != FALSE;
+            }
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            workspace->tracking = false;
+            if (workspace->hover != -1) {
+                workspace->hover = -1;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return 0;
+        case WM_LBUTTONDOWN: {
+            int drag = (PtInRect(&workspace->dividerX, point) ? 1 : 0) |
+                       (PtInRect(&workspace->dividerY, point) ? 2 : 0);
+            if (drag) {
+                workspace->dragging = drag;
+                SetCapture(window);
+                return 0;
+            }
+            int hit = BetterPanelWorkspaceHitAt(workspace, point);
+            if (hit >= 0) {
+                auto copy = workspace->hits[hit];
+                if (copy.action == kWorkspaceSelect) {
+                    // A double-click on the header takes Explorer back there.
+                    DWORD now = GetMessageTime();
+                    bool doubleClick = copy.box == workspace->lastHeaderBox &&
+                                       now - workspace->lastHeaderClick <=
+                                           GetDoubleClickTime();
+                    workspace->lastHeaderClick = doubleClick ? 0 : now;
+                    workspace->lastHeaderBox = copy.box;
+                    if (doubleClick) {
+                        BetterPanelWorkspaceSelect(workspace, copy.box);
+                        BetterPanelWorkspaceReveal(workspace, copy.box);
+                        return 0;
+                    }
+                }
+                BetterPanelWorkspaceRun(workspace, copy);
+                if (copy.action == kWorkspaceSelect) {
+                    // Dragging a header carries the box's items out.
+                    POINT screen = point;
+                    ClientToScreen(window, &screen);
+                    if (DragDetect(window, screen)) {
+                        BetterPanelWorkspaceDragOut(workspace, copy.box);
+                    }
+                }
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP:
+            if (workspace->dragging) {
+                workspace->dragging = 0;
+                ReleaseCapture();
+                BetterPanelWorkspaceSave(workspace);
+            }
+            return 0;
+        case WM_CAPTURECHANGED:
+            workspace->dragging = 0;
+            return 0;
+        case WM_PARENTNOTIFY: {
+            // Clicking inside a box's panel selects the box.
+            UINT event = LOWORD(wParam);
+            if (event == WM_LBUTTONDOWN || event == WM_RBUTTONDOWN ||
+                event == WM_MBUTTONDOWN) {
+                for (int i = 0; i < BetterPanelWorkspaceBoxCount(workspace); ++i) {
+                    if (PtInRect(&workspace->boxes[i].panel, point)) {
+                        BetterPanelWorkspaceSelect(workspace, i);
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+void BetterPanelDestroyWorkspace(BetterPanelState* state) {
+    auto* workspace = state ? state->workspace : nullptr;
+    if (!workspace) return;
+    state->workspace = nullptr;
+    state->detachedSelectionSignature.clear();
+    BetterPanelWorkspaceSave(workspace);
+    for (auto& box : workspace->boxes) BetterPanelWorkspaceDestroyBox(box);
+    if (workspace->dropTarget) {
+        RevokeDragDrop(workspace->host);
+        workspace->dropTarget->Detach();
+        workspace->dropTarget->Release();
+        workspace->dropTarget = nullptr;
+    }
+    if (workspace->host && IsWindow(workspace->host)) {
+        RemovePropW(workspace->host, kBetterPanelWorkspaceProp);
+        DestroyWindow(workspace->host);
+    }
+    delete workspace;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// The pop-out's own title bar: the title on the left, Minimize (to a small
+// floating button) and Pin (back into Explorer) on the right. Dragging it
+// moves the window, double-clicking maximizes, right-clicking opens the
+// window menu, as with a normal title bar.
+
+void BetterPanelRequestPinDetachedWindow(BetterPanelState* state);
+
+int BetterPanelCaptionHeight(BetterPanelState* state) {
+    if (!state || !state->customFrame || !state->detachedWindow) return 0;
+    return MulDiv(36, GetDpiForWindow(state->detachedWindow), 96);
+}
+
+// Docked (to Explorer, a screen edge or a corner), the pop-out stays where the
+// dock puts it: its title bar doesn't move it, and an Undock button shows.
+bool BetterPanelPopoutDocked(BetterPanelState* state) {
+    return state && state->detachedAttach != BetterPanelWindowAttach::Free;
+}
+
+// Caption buttons: 0 minimize, 1 pin, 2 undock (only while docked). From the
+// right: pin, minimize, then undock (wider, with a label).
+int BetterPanelCaptionButtonCount(BetterPanelState* state) {
+    return BetterPanelPopoutDocked(state) ? 3 : 2;
+}
+
+RECT BetterPanelCaptionButton(BetterPanelState* state, int index) {
+    RECT client{};
+    GetClientRect(state->detachedWindow, &client);
+    int height = BetterPanelCaptionHeight(state);
+    UINT dpi = GetDpiForWindow(state->detachedWindow);
+    int width = MulDiv(46, dpi, 96);
+    int right = client.right;
+    if (index == 1) return {right - width, 0, right, height};
+    right -= width;
+    if (index == 0) return {right - width, 0, right, height};
+    return {right - width * 2, 0, right - width, height};
+}
+
+int BetterPanelCaptionButtonAt(BetterPanelState* state, POINT point) {
+    for (int i = 0; i < BetterPanelCaptionButtonCount(state); ++i) {
+        RECT rect = BetterPanelCaptionButton(state, i);
+        if (PtInRect(&rect, point)) return i;
+    }
+    return -1;
+}
+
+// The undock button's icon, drawn as line art to sit with the other caption
+// glyphs: two chain links on a diagonal, each with its broken stub pointing
+// at the gap, and three sparks at the break. Drawn at 4x and scaled down
+// smoothly (plain GDI lines would be jagged at this size).
+void BetterPanelDrawBrokenLink(HDC dc, RECT const& rect, COLORREF ink,
+                               COLORREF back, int dpi) {
+    int size = MulDiv(20, dpi, 96);
+    constexpr int kOver = 4;
+    int big = size * kOver;
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP bitmap = CreateCompatibleBitmap(dc, big, big);
+    HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+    RECT all{0, 0, big, big};
+    SetDCBrushColor(memory, back);
+    FillRect(memory, &all, static_cast<HBRUSH>(GetStockObject(DC_BRUSH)));
+    // A 24-unit design grid, centred on the break.
+    float unit = big / 24.0f;
+    LOGBRUSH stroke{BS_SOLID, ink, 0};
+    HPEN pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_ENDCAP_ROUND | PS_JOIN_ROUND,
+                            std::max(1, static_cast<int>(unit * 1.5f)), &stroke, 0,
+                            nullptr);
+    HGDIOBJ oldPen = SelectObject(memory, pen);
+    HGDIOBJ oldBrush = SelectObject(memory, GetStockObject(NULL_BRUSH));
+    SetGraphicsMode(memory, GM_ADVANCED);
+    // Along the links' axis (bottom-left to top-right).
+    constexpr float kAxis = 0.70710678f;
+    auto at = [&](float along, float across) {
+        // across is perpendicular, towards the top-left.
+        return POINT{static_cast<LONG>((12 + along * kAxis - across * kAxis) * unit),
+                     static_cast<LONG>((12 - along * kAxis - across * kAxis) * unit)};
+    };
+    for (int side : {1, -1}) {
+        // The link: a rounded loop centred well out along the axis, so the
+        // break between the two is plain to see.
+        POINT centre = at(side * 6.8f, 0);
+        XFORM rotate{kAxis, -kAxis, kAxis, kAxis, static_cast<float>(centre.x),
+                     static_cast<float>(centre.y)};
+        SetWorldTransform(memory, &rotate);
+        int halfLength = static_cast<int>(4.7f * unit);
+        int halfWidth = static_cast<int>(2.5f * unit);
+        RoundRect(memory, -halfLength, -halfWidth, halfLength, halfWidth,
+                  halfWidth * 2, halfWidth * 2);
+        ModifyWorldTransform(memory, nullptr, MWT_IDENTITY);
+        // Its broken stub, from inside the loop out towards the gap.
+        POINT from = at(side * 4.0f, 0);
+        POINT to = at(side * 1.2f, 0);
+        MoveToEx(memory, from.x, from.y, nullptr);
+        LineTo(memory, to.x, to.y);
+    }
+    // Sparks at the break, fanning out to the top-left.
+    struct Spark { float along1, across1, along2, across2; };
+    static constexpr Spark sparks[] = {
+        {-1.9f, 3.3f, -3.6f, 5.0f},
+        {0.0f, 3.8f, 0.0f, 6.3f},
+        {1.9f, 3.3f, 3.6f, 5.0f},
+    };
+    for (auto const& spark : sparks) {
+        POINT a = at(spark.along1, spark.across1);
+        POINT b = at(spark.along2, spark.across2);
+        MoveToEx(memory, a.x, a.y, nullptr);
+        LineTo(memory, b.x, b.y);
+    }
+    SelectObject(memory, oldBrush);
+    SelectObject(memory, oldPen);
+    DeleteObject(pen);
+    int x = (rect.left + rect.right - size) / 2;
+    int y = (rect.top + rect.bottom - size) / 2;
+    SetStretchBltMode(dc, HALFTONE);
+    SetBrushOrgEx(dc, 0, 0, nullptr);
+    StretchBlt(dc, x, y, size, size, memory, 0, 0, big, big, SRCCOPY);
+    SelectObject(memory, oldBitmap);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+}
+
+void BetterPanelPaintCaption(BetterPanelState* state, HDC dc) {
+    HWND window = state->detachedWindow;
+    int height = BetterPanelCaptionHeight(state);
+    RECT client{};
+    GetClientRect(window, &client);
+    RECT bar{0, 0, client.right, height};
+    auto colors = BetterPanelGetWorkspaceColors(BetterPanelWorkspaceDark());
+    bool active = GetForegroundWindow() == window;
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP bitmap = CreateCompatibleBitmap(dc, std::max(1L, bar.right),
+                                            std::max(1, height));
+    HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+    BetterPanelWorkspaceFill(memory, bar, colors.toolbar);
+    int dpi = GetDpiForWindow(window);
+    auto scale = [&](int value) { return MulDiv(value, dpi, 96); };
+    HFONT font = CreateFontW(-scale(12), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+                             FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH, L"Segoe UI Variable Text");
+    HFONT icons = CreateFontW(-scale(10), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+                              FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                              CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                              DEFAULT_PITCH, L"Segoe Fluent Icons");
+    HGDIOBJ oldFont = SelectObject(memory, font);
+    SetBkMode(memory, TRANSPARENT);
+    SetTextColor(memory, active ? colors.text : colors.secondary);
+    int buttonsLeft = BetterPanelCaptionButton(
+        state, BetterPanelCaptionButtonCount(state) - 1).left;
+    RECT title{scale(14), 0, buttonsLeft - scale(8), height};
+    std::wstring text = L"Better Panel";
+    if (HWND linked = BetterPanelLinkedExplorer(state)) {
+        text += L"  ·  " + BetterPanelWindowTitle(linked);
+    }
+    DrawTextW(memory, text.c_str(), static_cast<int>(text.size()), &title,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                  DT_NOPREFIX);
+    // Minimize (to the floating button) and Pin (back into Explorer).
+    static constexpr wchar_t glyphs[] = {0xE921, 0xE718};
+    for (int i = 0; i < 2; ++i) {
+        RECT rect = BetterPanelCaptionButton(state, i);
+        if (i == state->captionPressed || i == state->captionHover) {
+            BetterPanelWorkspaceFill(memory, rect, colors.hover);
+        }
+        SelectObject(memory, icons);
+        SetTextColor(memory, active ? colors.text : colors.secondary);
+        DrawTextW(memory, &glyphs[i], 1, &rect,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    // Undock, while docked: a broken chain link.
+    if (BetterPanelPopoutDocked(state)) {
+        RECT rect = BetterPanelCaptionButton(state, 2);
+        bool hot = state->captionPressed == 2 || state->captionHover == 2;
+        COLORREF back = hot ? colors.hover : colors.toolbar;
+        if (hot) BetterPanelWorkspaceFill(memory, rect, back);
+        BetterPanelDrawBrokenLink(memory, rect, active ? colors.text : colors.secondary,
+                                  back, dpi);
+    }
+    BitBlt(dc, 0, 0, bar.right, height, memory, 0, 0, SRCCOPY);
+    SelectObject(memory, oldFont);
+    SelectObject(memory, oldBitmap);
+    DeleteObject(font);
+    DeleteObject(icons);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+}
+
+void BetterPanelInvalidateCaption(BetterPanelState* state) {
+    if (!state || !state->detachedWindow) return;
+    RECT client{};
+    GetClientRect(state->detachedWindow, &client);
+    RECT bar{0, 0, client.right, BetterPanelCaptionHeight(state)};
+    InvalidateRect(state->detachedWindow, &bar, FALSE);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Floating button: Minimize shrinks the pop-out to a small square that stays
+// on top of other windows. Click it to bring the pop-out back; drag it
+// anywhere (it snaps to nearby screen edges and remembers its spot);
+// right-click for Restore or Pin to Explorer.
+
+LRESULT CALLBACK BetterPanelWidgetProc(HWND window, UINT message, WPARAM wParam,
+                                       LPARAM lParam);
+void BetterPanelShowPeek(BetterPanelState* state);
+void BetterPanelHidePeek(BetterPanelState* state);
+void BetterPanelSetWidgetDropTarget(BetterPanelState* state, bool enable);
+
+PCWSTR BetterPanelWidgetClassName() {
+    static std::wstring const name = [] {
+        std::wstring value = L"BetterPanelWidget_" +
+                             std::to_wstring(reinterpret_cast<uintptr_t>(
+                                 BetterPanelGetThisModule())) +
+                             L"_" + std::to_wstring(GetTickCount64());
+        WNDCLASSEXW windowClass{sizeof(windowClass)};
+        windowClass.lpfnWndProc = BetterPanelWidgetProc;
+        windowClass.hInstance = BetterPanelGetThisModule();
+        windowClass.hCursor = LoadCursorW(nullptr, IDC_HAND);
+        windowClass.lpszClassName = value.c_str();
+        RegisterClassExW(&windowClass);
+        return value;
+    }();
+    return name.c_str();
+}
+
+void BetterPanelRestoreFromWidget(BetterPanelState* state) {
+    if (!state || !state->widgetWindow) return;
+    BetterPanelHidePeek(state);
+    BetterPanelSetWidgetDropTarget(state, false);
+    HWND widget = state->widgetWindow;
+    state->widgetWindow = nullptr;
+    DestroyWindow(widget);
+    if (HWND window = state->detachedWindow; window && IsWindow(window)) {
+        ShowWindow(window, SW_SHOW);
+        BetterPanelPositionDetachedWindow(state);
+        BetterPanelApplyDetachedTopmost(state);
+        SetForegroundWindow(window);
+    }
+}
+
+void BetterPanelMinimizeToWidget(BetterPanelState* state) {
+    if (!state || !state->detachedWindow || state->widgetWindow) return;
+    HWND window = state->detachedWindow;
+    int size = MulDiv(48, GetDpiForWindow(window), 96);
+    // Its remembered spot if that is still on a screen; otherwise the
+    // pop-out's top-right corner.
+    RECT frame = BetterPanelVisibleFrame(window);
+    POINT spot{frame.right - size, frame.top};
+    if (Wh_GetIntValue(L"betterPanelWidgetSaved", 0)) {
+        POINT saved{Wh_GetIntValue(L"betterPanelWidgetX", spot.x),
+                    Wh_GetIntValue(L"betterPanelWidgetY", spot.y)};
+        RECT savedRect{saved.x, saved.y, saved.x + size, saved.y + size};
+        if (MonitorFromRect(&savedRect, MONITOR_DEFAULTTONULL)) spot = saved;
+    }
+    HWND widget = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+        BetterPanelWidgetClassName(), L"Better Panel", WS_POPUP, spot.x, spot.y,
+        size, size, nullptr, nullptr, BetterPanelGetThisModule(), state);
+    if (!widget) return;
+    DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+    DwmSetWindowAttribute(widget, DWMWA_WINDOW_CORNER_PREFERENCE, &corner,
+                          sizeof(corner));
+    BOOL dark = BetterPanelWorkspaceDark();
+    DwmSetWindowAttribute(widget, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,
+                          sizeof(dark));
+    state->widgetWindow = widget;
+    BetterPanelSetWidgetDropTarget(state, true);
+    // Give Explorer back the room the attached pop-out took.
+    BetterPanelRestoreExplorerRoom(state);
+    ShowWindow(window, SW_HIDE);
+    ShowWindow(widget, SW_SHOWNOACTIVATE);
+}
+
+LRESULT CALLBACK BetterPanelWidgetProc(HWND window, UINT message, WPARAM wParam,
+                                       LPARAM lParam) {
+    auto* state = reinterpret_cast<BetterPanelState*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    // Pressed position (screen), whether it is being dragged, hover.
+    static POINT pressed{};
+    static bool dragging = false;
+    static bool hover = false;
+    switch (message) {
+        case WM_NCCREATE:
+            SetWindowLongPtrW(
+                window, GWLP_USERDATA,
+                reinterpret_cast<LONG_PTR>(
+                    reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams));
+            break;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(window, &paint);
+            RECT client{};
+            GetClientRect(window, &client);
+            auto colors = BetterPanelGetWorkspaceColors(BetterPanelWorkspaceDark());
+            BetterPanelWorkspaceFill(dc, client, hover ? colors.hover : colors.toolbar);
+            // An accent strip along the bottom marks it as Better Panel's.
+            int strip = std::max(2, MulDiv(3, GetDpiForWindow(window), 96));
+            RECT accent{client.left + strip * 3, client.bottom - strip * 2,
+                        client.right - strip * 3, client.bottom - strip};
+            BetterPanelWorkspaceFill(dc, accent, colors.accent);
+            HFONT icons = CreateFontW(
+                -MulDiv(20, GetDpiForWindow(window), 96), 0, 0, 0, FW_NORMAL, FALSE,
+                FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH,
+                L"Segoe Fluent Icons");
+            HGDIOBJ old = SelectObject(dc, icons);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, colors.text);
+            wchar_t glyph = 0xE8A0;  // a panel beside a page
+            DrawTextW(dc, &glyph, 1, &client,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            SelectObject(dc, old);
+            DeleteObject(icons);
+            EndPaint(window, &paint);
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            if (!hover) {
+                hover = true;
+                TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, window, 0};
+                TrackMouseEvent(&track);
+                InvalidateRect(window, nullptr, FALSE);
+                // Resting on the button opens Quick Peek.
+                if (state && !state->peekWindow) SetTimer(window, 7, 350, nullptr);
+            }
+            if (GetCapture() == window) {
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                if (!dragging &&
+                    (std::abs(cursor.x - pressed.x) > GetSystemMetrics(SM_CXDRAG) ||
+                     std::abs(cursor.y - pressed.y) > GetSystemMetrics(SM_CYDRAG))) {
+                    dragging = true;
+                    KillTimer(window, 7);
+                    BetterPanelHidePeek(state);
+                }
+                if (dragging) {
+                    RECT rect{};
+                    GetWindowRect(window, &rect);
+                    SetWindowPos(window, nullptr, rect.left + cursor.x - pressed.x,
+                                 rect.top + cursor.y - pressed.y, 0, 0,
+                                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    pressed = cursor;
+                }
+            }
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            hover = false;
+            KillTimer(window, 7);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        case WM_TIMER:
+            if (wParam == 7) {
+                KillTimer(window, 7);
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                RECT rect{};
+                GetWindowRect(window, &rect);
+                if (PtInRect(&rect, cursor) && GetCapture() != window) {
+                    BetterPanelShowPeek(state);
+                }
+            }
+            return 0;
+        case WM_LBUTTONDOWN:
+            GetCursorPos(&pressed);
+            dragging = false;
+            SetCapture(window);
+            return 0;
+        case WM_LBUTTONUP: {
+            if (GetCapture() != window) return 0;
+            // Read before ReleaseCapture: it sends WM_CAPTURECHANGED right
+            // away, which clears the flag.
+            bool wasDragging = dragging;
+            ReleaseCapture();
+            dragging = false;
+            if (!wasDragging) {
+                BetterPanelRestoreFromWidget(state);  // destroys this window
+                return 0;
+            }
+            // Snap to a screen edge or corner it was dropped near.
+            RECT rect{};
+            GetWindowRect(window, &rect);
+            MONITORINFO monitor{sizeof(monitor)};
+            GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST),
+                            &monitor);
+            RECT work = monitor.rcWork;
+            int margin = MulDiv(8, GetDpiForWindow(window), 96);
+            int reach = MulDiv(std::max(24, g_settings.windowSnapDistance),
+                               GetDpiForWindow(window), 96);
+            int width = rect.right - rect.left;
+            int height = rect.bottom - rect.top;
+            int x = std::clamp(static_cast<int>(rect.left),
+                               static_cast<int>(work.left),
+                               static_cast<int>(work.right) - width);
+            int y = std::clamp(static_cast<int>(rect.top),
+                               static_cast<int>(work.top),
+                               static_cast<int>(work.bottom) - height);
+            if (x - work.left <= reach) x = work.left + margin;
+            else if (work.right - (x + width) <= reach) x = work.right - width - margin;
+            if (y - work.top <= reach) y = work.top + margin;
+            else if (work.bottom - (y + height) <= reach) y = work.bottom - height - margin;
+            SetWindowPos(window, nullptr, x, y, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            Wh_SetIntValue(L"betterPanelWidgetX", x);
+            Wh_SetIntValue(L"betterPanelWidgetY", y);
+            Wh_SetIntValue(L"betterPanelWidgetSaved", 1);
+            return 0;
+        }
+        case WM_CAPTURECHANGED:
+            dragging = false;
+            return 0;
+        case WM_RBUTTONUP: {
+            HMENU menu = CreatePopupMenu();
+            if (!menu) return 0;
+            AppendMenuW(menu, MF_STRING, 1, L"Restore Better Panel");
+            AppendMenuW(menu, MF_STRING, 2, L"Pin to Explorer");
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            SetForegroundWindow(window);
+            UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY,
+                                            cursor.x, cursor.y, window, nullptr);
+            DestroyMenu(menu);
+            if (command == 1) {
+                BetterPanelRestoreFromWidget(state);
+            } else if (command == 2 && state) {
+                BetterPanelRestoreFromWidget(state);
+                BetterPanelRequestPinDetachedWindow(state);
+            }
+            return 0;
+        }
+        case WM_NCDESTROY:
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            if (state && state->widgetWindow == window) state->widgetWindow = nullptr;
+            break;
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+// In the Workspace the boxes fill the pop-out (each is a panel); the pop-out's
+// own panel returns when the Workspace closes.
+void BetterPanelLayoutWorkspaceWindow(BetterPanelState* state) {
+    if (!state || !state->detachedWindow) return;
+    RECT client{};
+    GetClientRect(state->detachedWindow, &client);
+    // Below the pop-out's own title bar.
+    int top = std::min(static_cast<int>(client.bottom),
+                       BetterPanelCaptionHeight(state));
+    int height = std::max(0, static_cast<int>(client.bottom) - top);
+    HWND island = state->detachedIslandWindow;
+    if (state->workspace) {
+        MoveWindow(state->workspace->host, 0, top, client.right, height, TRUE);
+        if (island) ShowWindow(island, SW_HIDE);
+    } else if (island) {
+        MoveWindow(island, 0, top, client.right, height, TRUE);
+        ShowWindow(island, SW_SHOW);
+    }
+}
+
+// Shows the Workspace or the panel in the pop-out.
+void BetterPanelApplyWorkspaceMode(BetterPanelState* state) {
+    if (!state || !state->detachedWindow) return;
+    Wh_SetIntValue(L"betterPanelWorkspaceOpen", state->workspaceMode ? 1 : 0);
+    RECT client{};
+    GetClientRect(state->detachedWindow, &client);
+    if (state->workspaceMode) {
+        if (!state->workspace) {
+            auto* workspace = new BetterPanelWorkspace();
+            workspace->state = state;
+            // The host reuses the pop-out's window class; its window
+            // procedure hands messages to the Workspace through a property.
+            workspace->host = CreateWindowExW(
+                WS_EX_CONTROLPARENT, BetterPanelDetachedClassName(), L"",
+                WS_CHILD | WS_CLIPCHILDREN, 0, 0, client.right, client.bottom,
+                state->detachedWindow, nullptr, BetterPanelGetThisModule(),
+                nullptr);
+            if (!workspace->host) {
+                delete workspace;
+                state->workspaceMode = false;
+                return;
+            }
+            SetPropW(workspace->host, kBetterPanelWorkspaceProp, workspace);
+            workspace->dropTarget = new BetterPanelWorkspaceDropTarget(workspace);
+            if (FAILED(RegisterDragDrop(workspace->host, workspace->dropTarget))) {
+                workspace->dropTarget->Release();
+                workspace->dropTarget = nullptr;
+            }
+            state->workspace = workspace;
+            BetterPanelWorkspaceLoad(workspace);
+            workspace->seen = BetterPanelWorkspaceExplorerSignature(workspace);
+            BetterPanelLayoutWorkspaceWindow(state);
+            ShowWindow(workspace->host, SW_SHOW);
+            BetterPanelWorkspaceLayout(workspace);
+        }
+        BetterPanelLayoutWorkspaceWindow(state);
+        ShowWindow(state->workspace->host, SW_SHOW);
+    } else {
+        // Leaving the Workspace closes its boxes.
+        BetterPanelDestroyWorkspace(state);
+        BetterPanelLayoutWorkspaceWindow(state);
+    }
+}
+
 LRESULT CALLBACK BetterPanelDetachedWindowProc(HWND window, UINT message,
                                                 WPARAM wParam,
                                                 LPARAM lParam) {
+    if (auto* workspace = static_cast<BetterPanelWorkspace*>(
+            GetPropW(window, kBetterPanelWorkspaceProp))) {
+        if (message == WM_NCDESTROY) {
+            RemovePropW(window, kBetterPanelWorkspaceProp);
+        } else {
+            return BetterPanelWorkspaceProc(workspace, window, message, wParam,
+                                            lParam);
+        }
+    }
     BetterPanelState* state = reinterpret_cast<BetterPanelState*>(
         GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -8846,23 +12526,279 @@ LRESULT CALLBACK BetterPanelDetachedWindowProc(HWND window, UINT message,
         SetWindowLongPtrW(window, GWLP_USERDATA,
                           reinterpret_cast<LONG_PTR>(state));
     }
+    // The pop-out (not the carrier or Workspace host) draws its own title bar.
+    bool frame = state && state->customFrame && state->detachedWindow == window;
+    if (frame) {
+        POINT client{static_cast<short>(LOWORD(lParam)),
+                     static_cast<short>(HIWORD(lParam))};
+        switch (message) {
+            case WM_NCCALCSIZE:
+                if (wParam) {
+                    // Keep the side and bottom resize borders; drop the
+                    // caption. A maximized window hangs past the screen by
+                    // its frame, so keep that much off the top.
+                    auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                    LONG top = params->rgrc[0].top;
+                    LRESULT result =
+                        DefWindowProcW(window, message, wParam, lParam);
+                    params->rgrc[0].top = top;
+                    if (IsZoomed(window)) {
+                        UINT dpi = GetDpiForWindow(window);
+                        params->rgrc[0].top +=
+                            GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
+                            GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                    }
+                    return result;
+                }
+                break;
+            case WM_NCHITTEST: {
+                LRESULT hit = DefWindowProcW(window, message, wParam, lParam);
+                if (hit != HTCLIENT) return hit;
+                POINT point = client;
+                ScreenToClient(window, &point);
+                if (point.y >= BetterPanelCaptionHeight(state) ||
+                    BetterPanelCaptionButtonAt(state, point) >= 0) {
+                    return HTCLIENT;
+                }
+                UINT dpi = GetDpiForWindow(window);
+                int border = GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
+                             GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                if (!IsZoomed(window) && point.y < border) {
+                    RECT rect{};
+                    GetClientRect(window, &rect);
+                    if (point.x < border * 2) return HTTOPLEFT;
+                    if (point.x >= rect.right - border * 2) return HTTOPRIGHT;
+                    return HTTOP;
+                }
+                // The rest of the bar is handled as client area: dragging it
+                // is done below, so Windows' snapping stays out of the way.
+                return HTCLIENT;
+            }
+            case WM_ERASEBKGND:
+                return 1;
+            case WM_PAINT: {
+                PAINTSTRUCT paint{};
+                HDC dc = BeginPaint(window, &paint);
+                BetterPanelPaintCaption(state, dc);
+                EndPaint(window, &paint);
+                return 0;
+            }
+            case WM_ACTIVATE:
+                BetterPanelInvalidateCaption(state);
+                break;
+            case WM_MOUSEMOVE: {
+                if (state->captionDragging) {
+                    POINT cursor{};
+                    GetCursorPos(&cursor);
+                    RECT rect{};
+                    GetWindowRect(window, &rect);
+                    SetWindowPos(window, nullptr,
+                                 rect.left + cursor.x - state->captionDragCursor.x,
+                                 rect.top + cursor.y - state->captionDragCursor.y, 0,
+                                 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    state->captionDragCursor = cursor;
+                    return 0;
+                }
+                int hover = BetterPanelCaptionButtonAt(state, client);
+                if (hover != state->captionHover) {
+                    state->captionHover = hover;
+                    BetterPanelInvalidateCaption(state);
+                }
+                if (!state->captionTracking) {
+                    TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, window, 0};
+                    state->captionTracking = TrackMouseEvent(&track) != FALSE;
+                }
+                return 0;
+            }
+            case WM_MOUSELEAVE:
+                state->captionTracking = false;
+                if (state->captionHover != -1) {
+                    state->captionHover = -1;
+                    BetterPanelInvalidateCaption(state);
+                }
+                return 0;
+            case WM_LBUTTONDOWN: {
+                int button = BetterPanelCaptionButtonAt(state, client);
+                if (button >= 0) {
+                    state->captionPressed = button;
+                    SetCapture(window);
+                    BetterPanelInvalidateCaption(state);
+                    return 0;
+                }
+                if (client.y >= BetterPanelCaptionHeight(state)) return 0;
+                if (BetterPanelAttachedToExplorer(state)) {
+                    // Attached to Explorer, the two move as one: dragging
+                    // here drags Explorer (as if by its own title bar), and
+                    // the pop-out follows it as usual.
+                    if (HWND explorer = BetterPanelLinkedExplorer(state)) {
+                        ReleaseCapture();
+                        SetForegroundWindow(explorer);
+                        constexpr WPARAM kDragMove = SC_MOVE | HTCAPTION;
+                        PostMessageW(explorer, WM_SYSCOMMAND, kDragMove, 0);
+                    }
+                    return 0;
+                }
+                // Docked to the screen, it stays where the dock puts it
+                // (the unlink button frees it).
+                if (BetterPanelPopoutDocked(state)) return 0;
+                // Double-click maximizes or restores.
+                DWORD now = GetMessageTime();
+                if (now - state->captionLastClick <= GetDoubleClickTime() &&
+                    std::abs(client.x - state->captionLastClickPoint.x) <=
+                        GetSystemMetrics(SM_CXDOUBLECLK) &&
+                    std::abs(client.y - state->captionLastClickPoint.y) <=
+                        GetSystemMetrics(SM_CYDOUBLECLK)) {
+                    state->captionLastClick = 0;
+                    ShowWindow(window, IsZoomed(window) ? SW_RESTORE : SW_MAXIMIZE);
+                    return 0;
+                }
+                state->captionLastClick = now;
+                state->captionLastClickPoint = client;
+                if (IsZoomed(window)) return 0;
+                // Drag the window; docking is decided when it is let go.
+                state->detachedMoveStart = BetterPanelVisibleFrame(window);
+                GetCursorPos(&state->captionDragCursor);
+                state->captionDragging = true;
+                SetCapture(window);
+                return 0;
+            }
+            case WM_LBUTTONUP: {
+                if (state->captionDragging) {
+                    state->captionDragging = false;
+                    ReleaseCapture();
+                    BetterPanelSnapDetachedWindow(state);
+                    return 0;
+                }
+                int pressed = state->captionPressed;
+                if (pressed < 0) return 0;
+                state->captionPressed = -1;
+                ReleaseCapture();
+                BetterPanelInvalidateCaption(state);
+                if (BetterPanelCaptionButtonAt(state, client) == pressed) {
+                    if (pressed == 0) {
+                        BetterPanelMinimizeToWidget(state);
+                    } else if (pressed == 2) {
+                        // Undock: float where it is, at the user's own size.
+                        BetterPanelSetDetachedAttach(state,
+                                                     BetterPanelWindowAttach::Free);
+                    } else {
+                        BetterPanelRequestPinDetachedWindow(state);
+                    }
+                }
+                return 0;
+            }
+            case WM_CAPTURECHANGED:
+                if (state->captionDragging) {
+                    // Capture lost mid-drag: dock wherever it ended up.
+                    state->captionDragging = false;
+                    BetterPanelSnapDetachedWindow(state);
+                }
+                if (state->captionPressed >= 0) {
+                    state->captionPressed = -1;
+                    BetterPanelInvalidateCaption(state);
+                }
+                break;
+            case WM_RBUTTONUP:
+                if (client.y < BetterPanelCaptionHeight(state) &&
+                    BetterPanelCaptionButtonAt(state, client) < 0) {
+                    // The window menu (Workspace, Link, positions, ...).
+                    HMENU menu = GetSystemMenu(window, FALSE);
+                    if (!menu) return 0;
+                    BetterPanelUpdateDetachedMenu(state, menu);
+                    POINT screen = client;
+                    ClientToScreen(window, &screen);
+                    UINT command = TrackPopupMenuEx(
+                        menu, TPM_RETURNCMD | TPM_NONOTIFY, screen.x, screen.y,
+                        window, nullptr);
+                    if (command) PostMessageW(window, WM_SYSCOMMAND, command, 0);
+                    return 0;
+                }
+                break;
+        }
+    }
     switch (message) {
         case WM_TIMER:
             if (wParam == 1 && state && state->detached) {
-                BetterPanelRefreshDetachedState(state);
+                BetterPanelApplyDetachedWindowSettings(state, false);
+                if (state->workspace) {
+                    BetterPanelWorkspaceTick(state->workspace);
+                } else {
+                    BetterPanelRefreshDetachedState(state);
+                }
                 return 0;
             }
             break;
         case WM_SIZE:
-            if (state && state->detachedIslandWindow) {
-                MoveWindow(state->detachedIslandWindow, 0, 0,
-                           LOWORD(lParam), HIWORD(lParam), TRUE);
+            if (state) {
+                BetterPanelLayoutWorkspaceWindow(state);
+                if (frame) BetterPanelInvalidateCaption(state);
             }
             return 0;
+        case WM_ENTERSIZEMOVE:
+            if (state) state->detachedMoveStart = BetterPanelVisibleFrame(window);
+            break;
+        case WM_EXITSIZEMOVE:
+            if (state && state->detached) BetterPanelSnapDetachedWindow(state);
+            break;
+        case WM_INITMENUPOPUP:
+            if (state && HIWORD(lParam)) {
+                BetterPanelUpdateDetachedMenu(state,
+                                              reinterpret_cast<HMENU>(wParam));
+            }
+            break;
+        case WM_SYSCOMMAND:
+            if (state && state->detached) {
+                switch (wParam & 0xFFF0) {
+                    case SC_MINIMIZE:
+                        // Minimizing (Win+Down, the window menu) shrinks it
+                        // to the floating button instead of the taskbar.
+                        BetterPanelMinimizeToWidget(state);
+                        return 0;
+                    case kBetterPanelMenuTopmost:
+                        state->detachedTopmost = !state->detachedTopmost;
+                        BetterPanelApplyDetachedTopmost(state);
+                        return 0;
+                    case kBetterPanelMenuWorkspace:
+                        state->workspaceMode = !state->workspaceMode;
+                        BetterPanelApplyWorkspaceMode(state);
+                        return 0;
+                    case kBetterPanelMenuLink: {
+                        POINT cursor{};
+                        GetCursorPos(&cursor);
+                        if (HWND chosen = BetterPanelPickExplorerWindow(
+                                state, window, cursor)) {
+                            BetterPanelSetLinkedExplorer(state, chosen);
+                            if (state->workspace) {
+                                state->workspace->seen =
+                                    BetterPanelWorkspaceExplorerSignature(
+                                        state->workspace);
+                            }
+                        }
+                        return 0;
+                    }
+                }
+                for (auto const& item : kBetterPanelPlacementMenu) {
+                    if ((wParam & 0xFFF0) == item.command) {
+                        BetterPanelSetDetachedAttach(state, item.attach);
+                        return 0;
+                    }
+                }
+            }
+            break;
         case WM_CLOSE:
             if (state) {
                 BetterPanelRequestPinDetachedWindow(state);
                 return 0;
+            }
+            break;
+        case WM_DESTROY:
+            // Destroyed along with its Explorer window (an owned window goes
+            // with its owner): close it as a shutdown, so it stays marked as
+            // popped out and comes back with the next Explorer window.
+            if (state && state->detached && !state->changingDetachedState &&
+                state->detachedWindow == window) {
+                state->detachedWindow = nullptr;
+                BetterPanelCloseDetachedWindow(state, false);
             }
             break;
         case WM_NCDESTROY:
@@ -8910,6 +12846,11 @@ BetterPanelDetachedClassRegistration& BetterPanelDetachedWindowClass() {
 ATOM BetterPanelRegisterDetachedWindowClass() {
     g_betterPanelDetachedClassEverUsed = true;
     return BetterPanelDetachedWindowClass().atom;
+}
+
+PCWSTR BetterPanelDetachedClassName() {
+    BetterPanelRegisterDetachedWindowClass();
+    return BetterPanelDetachedWindowClass().name.c_str();
 }
 
 bool BetterPanelUnregisterDetachedWindowClass() {
@@ -8965,12 +12906,32 @@ void BetterPanelCloseDetachedWindow(BetterPanelState* state,
                                     bool reattach) {
     if (!state || state->changingDetachedState) return;
     BetterPanelStopTextHandler(state);
+    if (HWND widget = state->widgetWindow) {
+        BetterPanelHidePeek(state);
+        BetterPanelSetWidgetDropTarget(state, false);
+        state->widgetWindow = nullptr;
+        if (IsWindow(widget)) DestroyWindow(widget);
+    }
+    state->customFrame = false;
+    state->captionHover = state->captionPressed = -1;
     state->nativePaneCommandGeneration.fetch_add(1, std::memory_order_relaxed);
     state->changingDetachedState = true;
     state->reattachRequested = false;
     state->nativePaneOpenForReattach = false;
     HWND window = state->detachedWindow;
-    if (window && IsWindow(window)) KillTimer(window, 1);
+    if (window && IsWindow(window)) {
+        KillTimer(window, 1);
+        BetterPanelSaveDetachedPlacement(state);
+    }
+    // Pinning back into Explorer is a choice to remember; closing because
+    // Explorer or the mod is shutting down is not.
+    if (reattach) Wh_SetIntValue(L"betterPanelPoppedOut", 0);
+    BetterPanelDestroyWorkspace(state);
+    state->workspaceMode = false;
+    BetterPanelUnhookExplorerFollow(state);
+    // Explorer's subclass is gone, so its maximized size no longer subtracts
+    // the panel; hand it back its space.
+    BetterPanelRestoreExplorerRoom(state);
     auto panel = state->panel.get().try_as<muxc::StackPanel>();
     auto host = state->host.get();
     auto nativePreview = state->nativePreview.get();
@@ -9034,6 +12995,23 @@ void BetterPanelCloseDetachedWindow(BetterPanelState* state,
     state->changingDetachedState = false;
     BetterPanelUpdateDetachButton(state);
     if (window && IsWindow(window)) DestroyWindow(window);
+    if (state->standalone) {
+        // No Explorer pane to go back to: the carrier goes, and with it the
+        // panel (its host unloads and the panel tears itself down).
+        state->standalone = false;
+        auto carrier = state->carrierSource;
+        HWND carrierWindow = state->carrierWindow;
+        state->carrierSource = nullptr;
+        state->carrierWindow = nullptr;
+        try {
+            if (carrier) {
+                carrier.Content(nullptr);
+                carrier.Close();
+            }
+        } catch (...) {
+        }
+        if (carrierWindow && IsWindow(carrierWindow)) DestroyWindow(carrierWindow);
+    }
 }
 
 enum class BetterPanelNativePaneCommandResult { Failed, Unchanged, Changed };
@@ -9226,8 +13204,13 @@ bool BetterPanelOpenDetachedWindow(BetterPanelState* state) {
     if (!host.Children().IndexOf(panel, panelIndex)) {
         return false;
     }
-    constexpr int popupWidth = 520;
-    constexpr int popupHeight = 760;
+    // The last size the user gave the pop-out, or the default.
+    int popupWidth = std::clamp(
+        static_cast<int>(Wh_GetIntValue(L"betterPanelPopoutWidth", 520)), 280,
+        4000);
+    int popupHeight = std::clamp(
+        static_cast<int>(Wh_GetIntValue(L"betterPanelPopoutHeight", 760)), 240,
+        4000);
     constexpr int popupGap = 12;
     RECT ownerRect{};
     GetWindowRect(state->explorerWindow, &ownerRect);
@@ -9347,11 +13330,52 @@ bool BetterPanelOpenDetachedWindow(BetterPanelState* state) {
                 winrt::Windows::Foundation::TimeSpan{40000000});
         }
 
-        RECT client{};
-        GetClientRect(window, &client);
-        MoveWindow(islandWindow, 0, 0, client.right, client.bottom, TRUE);
+        // Window behavior: placement, on-top state, and whether it hides
+        // with Explorer (an owned window does; an unowned one doesn't).
+        state->linkedWindow = nullptr;  // linked to its own Explorer window
+        // The position it was last given (title-bar menu, Link menu or a
+        // drag), remembered across sessions; attached right at first.
+        state->detachedAttach = static_cast<BetterPanelWindowAttach>(std::clamp(
+            Wh_GetIntValue(L"betterPanelPopoutAttach", 0), 0,
+            static_cast<int>(BetterPanelWindowAttach::CornerBottomRight)));
+        state->detachedTopmost = g_settings.windowAlwaysOnTop;
+        state->detachedSize = {popupWidth, popupHeight};
+        state->appliedTopmostSetting = g_settings.windowAlwaysOnTop;
+        state->appliedMinimizeSetting = g_settings.windowMinimizeWithExplorer;
+        if (!g_settings.windowMinimizeWithExplorer) {
+            SetWindowLongPtrW(window, GWLP_HWNDPARENT, 0);
+        }
+        BetterPanelAddDetachedMenu(window);
+        if (state->detachedAttach == BetterPanelWindowAttach::Free &&
+            Wh_GetIntValue(L"betterPanelPopoutFloating", 0)) {
+            RECT saved{Wh_GetIntValue(L"betterPanelPopoutX", x),
+                       Wh_GetIntValue(L"betterPanelPopoutY", y), 0, 0};
+            saved.right = saved.left + popupWidth;
+            saved.bottom = saved.top + popupHeight;
+            // Only reuse the spot if it is still on a monitor.
+            if (MonitorFromRect(&saved, MONITOR_DEFAULTTONULL)) {
+                BetterPanelPlaceVisibleFrame(window, saved);
+            }
+        }
+
+        // Its own title bar replaces the system one: the frame change makes
+        // Windows ask WM_NCCALCSIZE again, now without a caption.
+        state->customFrame = true;
+        SetWindowPos(window, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                         SWP_NOACTIVATE);
+        BetterPanelLayoutWorkspaceWindow(state);
         ShowWindow(islandWindow, SW_SHOW);
         ShowWindow(window, SW_SHOWNORMAL);
+        BetterPanelPositionDetachedWindow(state);
+        BetterPanelApplyDetachedTopmost(state);
+        BetterPanelHookExplorerFollow(state);
+        // Remembered for the next Explorer start, as is Workspace mode.
+        Wh_SetIntValue(L"betterPanelPoppedOut", 1);
+        int workspaceOpen = Wh_GetIntValue(L"betterPanelWorkspaceOpen", 0);
+        state->workspaceMode = g_settings.windowStartInWorkspace ||
+                               workspaceOpen > 0;
+        if (state->workspaceMode) BetterPanelApplyWorkspaceMode(state);
         SetTimer(window, 1, 500, nullptr);
         UpdateWindow(window);
         BetterPanelRequestNativePaneVisibility(state, false);
@@ -9369,9 +13393,131 @@ bool BetterPanelOpenDetachedWindow(BetterPanelState* state) {
     return false;
 }
 
+// Explorer's Details pane puts a thumbnail grid in the panel host, which the
+// panel uses as its preview (eye and expand buttons included). Panels built
+// outside the pane (Workspace boxes, a pop-out restored at Explorer start)
+// get a stand-in, and load thumbnails into it themselves.
+void BetterPanelAppendStandInThumbnail(muxc::StackPanel const& host) {
+    muxc::Grid thumbnail;
+    thumbnail.Height(240);
+    thumbnail.HorizontalAlignment(HorizontalAlignment::Stretch);
+    muxc::Image thumbnailImage;
+    thumbnailImage.Stretch(winrt::Microsoft::UI::Xaml::Media::Stretch::Uniform);
+    thumbnailImage.Margin(Thickness{12, 12, 12, 12});
+    thumbnail.Children().Append(thumbnailImage);
+    host.Children().Append(thumbnail);
+}
+
+bool BetterPanelPopoutOpen();
+
+// Opens the pop-out for |explorer| straight away, as it was left, without
+// Explorer's Details pane: the panel is built in a hidden carrier island and
+// moved into the pop-out window. Returns false if WinUI isn't ready yet on
+// this thread (the caller retries).
+bool BetterPanelOpenStandalonePopout(HWND explorer) {
+    if (!explorer || !IsWindow(explorer)) return false;
+    if (BetterPanelPopoutOpen()) return true;
+    // Never be the first WinUI content on Explorer's thread: Explorer loads
+    // its theme and control styles with its own XAML (the command bar). An
+    // island made before that starts WinUI without them, and every panel on
+    // the thread then draws blank buttons, empty boxes and missing icons.
+    bool explorerXaml = false;
+    EnumChildWindows(
+        explorer,
+        [](HWND child, LPARAM found) -> BOOL {
+            WCHAR className[96]{};
+            GetClassNameW(child, className, ARRAYSIZE(className));
+            if (wcsstr(className, L"DesktopChildSiteBridge") && IsWindowVisible(child)) {
+                *reinterpret_cast<bool*>(found) = true;
+                return FALSE;
+            }
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&explorerXaml));
+    if (!explorerXaml) return false;
+    try {
+        auto application = winrt::Microsoft::UI::Xaml::Application::Current();
+        if (!application ||
+            !application.Resources().TryLookup(winrt::box_value(L"DefaultButtonStyle"))) {
+            return false;
+        }
+    } catch (...) {
+        return false;
+    }
+    if (!BetterPanelRegisterDetachedWindowClass()) return false;
+    HWND carrier = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+        BetterPanelDetachedWindowClass().name.c_str(), L"", WS_POPUP, 0, 0, 520,
+        900, explorer, nullptr, BetterPanelGetThisModule(), nullptr);
+    if (!carrier) return false;
+    muxh::DesktopWindowXamlSource source{nullptr};
+    bool installed = false;
+    try {
+        winrt::Microsoft::UI::WindowId carrierId{};
+        if (!BetterPanelGetWindowId(carrier, carrierId)) {
+            DestroyWindow(carrier);
+            return false;
+        }
+        source = muxh::DesktopWindowXamlSource();
+        source.Initialize(carrierId);
+        muxc::StackPanel host;
+        host.Name(L"DetailsViewThumbnail");
+        BetterPanelAppendStandInThumbnail(host);
+        muxc::Grid root;
+        root.Children().Append(host);
+        source.Content(root);
+        installed = true;
+        BetterPanelInstallDetailPanel(host, nullptr);
+        std::shared_ptr<BetterPanelState> state;
+        {
+            std::lock_guard lock(g_betterPanelMutex);
+            for (auto const& candidate : g_betterPanels) {
+                if (candidate && candidate->host.get() == host) {
+                    state = candidate;
+                    break;
+                }
+            }
+        }
+        if (!state) throw winrt::hresult_error(E_FAIL, L"Panel not installed");
+        state->standalone = true;
+        state->carrierWindow = carrier;
+        state->carrierSource = source;
+        state->explorerWindow = explorer;
+        if (!BetterPanelOpenDetachedWindow(state.get())) {
+            // CloseDetachedWindow (run by the failed open) took the carrier.
+            return true;  // don't keep retrying a window that can't open
+        }
+        return true;
+    } catch (winrt::hresult_error const& ex) {
+        Wh_Log(L"Restored pop-out not ready %08X: %s", ex.code(),
+               ex.message().c_str());
+    } catch (...) {
+        Wh_Log(L"Restored pop-out not ready %08X", winrt::to_hresult().value);
+    }
+    try {
+        if (source) source.Close();
+    } catch (...) {
+    }
+    if (IsWindow(carrier)) DestroyWindow(carrier);
+    // Retry only failures before a panel was built; building one again and
+    // again would pile work onto Explorer's thread.
+    return installed;
+}
+
 void BetterPanelRequestPinDetachedWindow(BetterPanelState* state) {
     if (!state || !state->detached || state->changingDetachedState ||
         state->reattachRequested) return;
+    if (state->standalone) {
+        // Built without Explorer's pane: open the pane (it brings its own
+        // panel) and close this one.
+        HWND explorer = state->explorerWindow;
+        BetterPanelStartWorker([explorer]() {
+            std::lock_guard commandLock(g_betterPanelShortcutCommandMutex);
+            BetterPanelSetNativePaneVisibility(explorer, true);
+        });
+        BetterPanelCloseDetachedWindow(state, true);
+        return;
+    }
     state->reattachRequested = true;
     state->nativePaneOpenForReattach = false;
     BetterPanelRequestNativePaneVisibility(state, true);
@@ -9527,6 +13673,61 @@ bool BetterPanelCanDeleteSelectedPath(std::wstring const& path) {
            (attributes & SFGAO_FILESYSTEM) != 0;
 }
 
+// Windows 12 Explorer Concept compatibility. That mod draws its Settings,
+// Control Panel and System pages over empty carrier folders it creates in
+// %LOCALAPPDATA%\Windows12Explorer, and opens Control Panel items in the tab.
+// Better Panel must not treat those places as ordinary folders.
+bool BetterPanelIsWindows12Carrier(std::wstring const& path) {
+    if (!g_settings.windows12Compat || path.empty()) return false;
+    static std::wstring const root = [] {
+        WCHAR local[MAX_PATH]{};
+        DWORD length = GetEnvironmentVariableW(L"LOCALAPPDATA", local,
+                                               ARRAYSIZE(local));
+        if (!length || length >= ARRAYSIZE(local)) return std::wstring();
+        return std::wstring(local) + L"\\Windows12Explorer";
+    }();
+    if (root.empty() || path.size() < root.size() ||
+        _wcsnicmp(path.c_str(), root.c_str(), root.size()) != 0) {
+        return false;
+    }
+    return path.size() == root.size() || path[root.size()] == L'\\';
+}
+
+// Whether the Windows 12 mod is running in this Explorer window.
+bool BetterPanelWindows12Present(HWND explorerWindow) {
+    return g_settings.windows12Compat && explorerWindow &&
+           FindWindowExW(explorerWindow, nullptr, L"Windows12ExplorerPane",
+                         nullptr) != nullptr;
+}
+
+// Control Panel's root, its category view, or a single applet such as Power
+// Options (parsed as "::{applet GUID}" when opened directly).
+bool BetterPanelIsControlPanelLocation(std::wstring parsingName) {
+    std::transform(parsingName.begin(), parsingName.end(),
+                   parsingName.begin(), towlower);
+    if (parsingName.find(L"{26ee0668-a00a-44d7-9371-beb064c98683}") !=
+            std::wstring::npos ||
+        parsingName.find(L"{21ec2020-3aea-1069-a2dd-08002b30309d}") !=
+            std::wstring::npos) {
+        return true;
+    }
+    if (parsingName.size() != 40 || parsingName.rfind(L"::{", 0) != 0) {
+        return false;
+    }
+    std::wstring key =
+        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\"
+        L"ControlPanel\\NameSpace\\" + parsingName.substr(2);
+    for (HKEY hive : {HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER}) {
+        HKEY opened = nullptr;
+        if (RegOpenKeyExW(hive, key.c_str(), 0, KEY_READ, &opened) ==
+            ERROR_SUCCESS) {
+            RegCloseKey(opened);
+            return true;
+        }
+    }
+    return false;
+}
+
 std::vector<BetterPanelHomeLocation> BetterPanelRecentFolders() {
     struct LinkEntry {
         std::wstring path;
@@ -9580,7 +13781,8 @@ std::vector<BetterPanelHomeLocation> BetterPanelRecentFolders() {
         }
         DWORD attributes = GetFileAttributesW(target);
         if (attributes == INVALID_FILE_ATTRIBUTES ||
-            !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            BetterPanelIsWindows12Carrier(target)) {
             continue;
         }
         std::wstring key(target);
@@ -9710,7 +13912,11 @@ void BetterPanelNavigateFromHome(
     std::wstring target) {
     auto state = weakState.lock();
     if (!state || target.empty()) return;
-    BetterPanelExplorerWindowScope explorerWindowScope(state->explorerWindow);
+    // From a pop-out or a Workspace box, Home's places open in the linked
+    // Explorer window.
+    HWND scope = BetterPanelPanelScopeWindow(state.get());
+    BetterPanelExplorerWindowScope explorerWindowScope(
+        scope ? scope : state->explorerWindow);
     BetterPanelInvalidateExplorerQueryCaches();
     if (!BetterPanelNavigateCurrentTab(target)) {
         BetterPanelSetStatus(state->status,
@@ -9887,11 +14093,12 @@ BetterPanelDriveMeterStyle BetterPanelGetDriveMeterStyle(
     }
     switch (g_settings.appearanceTheme) {
     case Theme::XP:
-        return {dark ? 0x344B69u : 0xF8FAF9u,
-                dark ? 0x23354Fu : 0xE1E6E6u, palette.border,
-                0xA5D3F8, dark ? 0x3978C1u : 0x3E89D4u,
+        // Luna's green progress-bar fill; Zune keeps its orange accent.
+        return {dark ? 0x2E2E2E : 0xFFFFFFu,
+                dark ? 0x1E1E1E : 0xECEBE6u, palette.border,
+                dark ? 0xFFC77Au : 0x8BEA8Bu, dark ? 0xF7941Du : 0x23BA23u,
                 0xFFD18A, 0xE68B25,
-                0xF59894, 0xCB3D38, 11, 1, true};
+                0xF59894, 0xCB3D38, 11, 2, true};
     case Theme::Vista:
         return {dark ? 0x263139u : 0xFFFFFFu,
                 dark ? 0x0E151Au : 0xE8F0F3u, palette.border,
@@ -9906,11 +14113,13 @@ BetterPanelDriveMeterStyle BetterPanelGetDriveMeterStyle(
                 0xF69595, 0xD23D3D, 9, 1, true};
     case Theme::Win8:
     case Theme::Win10:
-        return {dark ? 0x343B46u : 0xE7EBEFu,
-                dark ? 0x343B46u : 0xE7EBEFu, palette.border,
-                palette.accent, palette.accent, 0xFF8C00, 0xFF8C00,
-                0xD13438, 0xD13438,
-                8, 0, false};
+        // The This PC capacity bar from Windows 8 and 10: flat blue fill in
+        // a light grey track, red when the drive is nearly full.
+        return {dark ? 0x2B2B2Bu : 0xE6E6E6u,
+                dark ? 0x2B2B2Bu : 0xE6E6E6u, dark ? 0x5C5C5Cu : 0xBCBCBCu,
+                0x26A0DA, 0x26A0DA, 0xFF8C00, 0xFF8C00,
+                0xDA2626, 0xDA2626,
+                8, 0, true};
     case Theme::Ubuntu:
         return {dark ? 0x414141u : 0xE1DFDCu,
                 dark ? 0x353535u : 0xD4D1CDu, palette.border,
@@ -10195,7 +14404,15 @@ void BetterPanelRenderHome(std::shared_ptr<BetterPanelState> const& state,
     if (!data.drives.empty()) {
         muxc::TextBlock drivesTitle;
         drivesTitle.Name(L"BetterDetailPanelSectionTitle");
-        drivesTitle.Text(L"Devices and drives");
+        // Snow Leopard's Finder sidebar labelled its groups in small,
+        // spaced capitals ("DEVICES", "PLACES").
+        if (state->customAppearance &&
+            g_settings.appearanceTheme == BetterPanelAppearanceTheme::MacAqua) {
+            drivesTitle.Text(L"DEVICES AND DRIVES");
+            drivesTitle.CharacterSpacing(40);
+        } else {
+            drivesTitle.Text(L"Devices and drives");
+        }
         drivesTitle.FontSize(14);
         drivesTitle.FontWeight(
             winrt::Microsoft::UI::Text::FontWeights::SemiBold());
@@ -10525,6 +14742,7 @@ void BetterPanelRestoreDetailsRootGrid(BetterPanelState* state) {
         }
     }
     state->nativePaneScrollSnapshots.clear();
+    BetterPanelRestoreMaterialAncestors(state);
     if (auto root = state->detailsRootGrid.get()) {
         try { root.Background(state->nativeDetailsRootBackground); }
         catch (...) {}
@@ -10551,7 +14769,11 @@ void BetterPanelTrackDetailsRootGrid(BetterPanelState* state,
     if (root) {
         state->detailsRootGrid = winrt::make_weak(root);
         state->nativeDetailsRootBackground = root.Background();
-        if (state->customAppearance) {
+        if (state->appearanceMaterialBrush) {
+            root.Background(state->appearanceMaterialBrush);
+            BetterPanelClearMaterialAncestors(state, root);
+            if (state->customAppearance) BetterPanelStyleNativePaneText(state);
+        } else if (state->customAppearance) {
             root.Background(state->appearanceBackground);
             BetterPanelStyleNativePaneText(state);
         }
@@ -11140,8 +15362,12 @@ void BetterPanelLoadInsights(
                 BetterPanelCacheFolderSummary(path, folderSummary);
             }
         }
+        // The Details card waits for the hash, and hashing reads the whole
+        // file: a multi-gigabyte disk image would hold Details back for a
+        // long time and keep the disk busy. Very large files skip it.
+        constexpr uint64_t kHashSizeLimit = 1ull << 30;  // 1 GB
         std::wstring hash;
-        if (data.success && !data.directory) {
+        if (data.success && !data.directory && data.size <= kHashSizeLimit) {
             hash = BetterPanelSha256(path, weakState, generation);
         }
         if (BetterPanelWorkerStopping()) return;
@@ -12028,6 +16254,11 @@ FrameworkElement BetterPanelFindNativeInfoBanner(
 }
 
 std::wstring BetterPanelGetActiveFolderParsingName() {
+    if (g_betterBoxView.active) {
+        return g_betterBoxView.home
+                   ? std::wstring(L"::{679f85cb-0220-4080-b29b-5540cc05aab6}")
+                   : g_betterBoxView.folder;
+    }
     HWND tab = BetterPanelGetFocusedTabWindow();
     auto browser = BetterPanelGetShellBrowser(tab);
     if (!browser) return {};
@@ -12058,6 +16289,10 @@ std::wstring BetterPanelGetActiveFolderParsingName() {
 }
 
 std::wstring BetterPanelGetActiveFolderDisplayName() {
+    if (g_betterBoxView.active) {
+        return g_betterBoxView.home ? std::wstring(L"Home")
+                                    : BetterPanelFileName(g_betterBoxView.folder);
+    }
     HWND tab = BetterPanelGetFocusedTabWindow();
     auto browser = BetterPanelGetShellBrowser(tab);
     if (!browser) return {};
@@ -12086,6 +16321,7 @@ std::wstring BetterPanelGetActiveFolderDisplayName() {
 }
 
 bool BetterPanelIsActiveHome() {
+    if (g_betterBoxView.active) return g_betterBoxView.home;
     auto parsingName = BetterPanelGetActiveFolderParsingName();
     std::transform(parsingName.begin(), parsingName.end(), parsingName.begin(),
                    towlower);
@@ -12415,6 +16651,638 @@ void BetterPanelHideNativeDetails(
     }
 }
 
+// The Workspace boxes that can take files, read from what the boxes saved,
+// so any Explorer window's panel can use them, even with the pop-out closed.
+// A box takes files into the folder it shows, or the one folder selected in
+// it; Home boxes are left out.
+struct BetterPanelWorkspaceDestination {
+    int box;
+    std::wstring folder;
+};
+
+std::vector<BetterPanelWorkspaceDestination> BetterPanelSavedWorkspaceDestinations() {
+    WCHAR layoutValue[128]{};
+    Wh_GetStringValue(L"betterPanelWorkspaceBoxes", layoutValue,
+                      ARRAYSIZE(layoutValue));
+    int layout = 2;
+    if (std::wstring_view view{layoutValue}; view.size() > 2) {
+        layout = std::clamp(_wtoi(layoutValue + 2), 1, 4);
+    }
+    int count = layout == 4 ? 4 : layout == 1 ? 1 : 2;
+    auto isFolder = [](std::wstring const& path) {
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        return !path.empty() && attributes != INVALID_FILE_ATTRIBUTES &&
+               (attributes & FILE_ATTRIBUTE_DIRECTORY);
+    };
+    std::vector<BetterPanelWorkspaceDestination> destinations;
+    std::vector<WCHAR> buffer(32768);
+    for (int i = 0; i < count; ++i) {
+        std::wstring name = L"betterPanelWorkspaceBox" + std::to_wstring(i);
+        buffer[0] = 0;
+        Wh_GetStringValue(name.c_str(), buffer.data(), buffer.size());
+        std::vector<std::wstring> lines;
+        for (std::wstring_view rest{buffer.data()}; !rest.empty();) {
+            size_t newline = rest.find(L'\n');
+            lines.emplace_back(rest.substr(0, newline));
+            if (newline == std::wstring_view::npos) break;
+            rest.remove_prefix(newline + 1);
+        }
+        if (lines.empty() || lines[0] == L"*home") continue;
+        if (lines.size() == 2 && isFolder(lines[1])) {
+            destinations.push_back({i, lines[1]});
+        } else if (isFolder(lines[0])) {
+            destinations.push_back({i, lines[0]});
+        }
+    }
+    return destinations;
+}
+
+// "To Workspace": a menu of Copy to / Move to for each Workspace box.
+muxc::Button BetterPanelMakeToWorkspaceButton(
+    std::shared_ptr<BetterPanelState> const& state) {
+    auto button = BetterPanelMakeIconButton(L"To Workspace", L"");
+    button.Visibility(g_settings.experimentalPopout ? Visibility::Visible
+                                                    : Visibility::Collapsed);
+    std::weak_ptr<BetterPanelState> weakState = state;
+    auto weakStatus = state->status;
+    button.Click([weakState, weakStatus](
+                     winrt::Windows::Foundation::IInspectable const& sender,
+                     RoutedEventArgs const&) {
+        auto state = weakState.lock();
+        if (!state) return;
+        auto sources = BetterPanelGetActiveSelectionPaths(false);
+        if (sources.empty() && !state->selectedPath.empty()) {
+            sources.push_back(state->selectedPath);
+        }
+        muxc::MenuFlyout flyout;
+        auto destinations = BetterPanelSavedWorkspaceDestinations();
+        if (sources.empty() || destinations.empty()) {
+            muxc::MenuFlyoutItem none;
+            none.Text(sources.empty() ? L"Select files first"
+                                      : L"No Workspace box shows a folder yet");
+            none.IsEnabled(false);
+            flyout.Items().Append(none);
+        }
+        for (bool copy : {true, false}) {
+            if (sources.empty()) break;
+            if (!copy && !destinations.empty()) {
+                flyout.Items().Append(muxc::MenuFlyoutSeparator());
+            }
+            for (auto const& destination : destinations) {
+                muxc::MenuFlyoutItem item;
+                item.Text((copy ? L"Copy to Workspace " : L"Move to Workspace ") +
+                          std::to_wstring(destination.box + 1) + L"  ·  " +
+                          BetterPanelDestinationLabel(destination.folder));
+                muxc::FontIcon icon;
+                icon.Glyph(copy ? L"" : L"");
+                item.Icon(icon);
+                item.Click([weakState, weakStatus, sources, copy,
+                            folder = destination.folder](auto const&, auto const&) {
+                    auto state = weakState.lock();
+                    if (!state || state->unloaded) return;
+                    HRESULT result = BetterPanelMoveItemsToFolder(
+                        sources, folder, state->explorerWindow, copy);
+                    BetterPanelSetStatus(
+                        weakStatus,
+                        SUCCEEDED(result) ? (copy ? L"Copy completed" : L"Move completed")
+                        : result == HRESULT_FROM_WIN32(ERROR_CANCELLED)
+                            ? L""
+                            : (copy ? L"Copy failed" : L"Move failed"));
+                });
+                flyout.Items().Append(item);
+            }
+        }
+        if (auto element = sender.try_as<FrameworkElement>()) {
+            flyout.ShowAt(element);
+        }
+    });
+    return button;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Quick Peek: hovering the floating button, or dragging files onto it, opens
+// a small list beside it of places to drop into: the linked Explorer's folder
+// and the Workspace boxes' folders (locked ones marked). Dropping on a row
+// copies or moves there with the Shell's usual rules and dialogs, without
+// restoring the pop-out. Clicking a row opens that folder in the linked
+// Explorer; clicking the header brings the pop-out back.
+
+struct BetterPanelPeekEntry {
+    std::wstring folder;
+    std::wstring title;
+    bool locked = false;
+    HICON icon = nullptr;
+};
+
+struct BetterPanelPeek {
+    BetterPanelState* state = nullptr;
+    HWND window = nullptr;
+    std::vector<BetterPanelPeekEntry> entries;
+    int hover = -1;
+    int drop = -1;
+    int awayTicks = 0;
+    IDropTarget* dropTarget = nullptr;
+};
+
+void BetterPanelHidePeek(BetterPanelState* state);
+void BetterPanelRestoreFromWidget(BetterPanelState* state);
+
+int BetterPanelPeekScale(HWND window, int value) {
+    return MulDiv(value, GetDpiForWindow(window), 96);
+}
+
+std::vector<BetterPanelPeekEntry> BetterPanelGatherPeekEntries(
+    BetterPanelState* state) {
+    std::vector<BetterPanelPeekEntry> entries;
+    auto add = [&](std::wstring const& folder, std::wstring title, bool locked) {
+        for (auto const& entry : entries) {
+            if (BetterPanelPathsEqual(entry.folder, folder)) return;
+        }
+        SHFILEINFOW info{};
+        SHGetFileInfoW(folder.c_str(), 0, &info, sizeof(info),
+                       SHGFI_ICON | SHGFI_SMALLICON);
+        entries.push_back({folder, std::move(title), locked, info.hIcon});
+    };
+    if (HWND linked = BetterPanelLinkedExplorer(state)) {
+        std::wstring folder = BetterPanelExplorerFolder(linked, nullptr);
+        DWORD attributes = GetFileAttributesW(folder.c_str());
+        if (!folder.empty() && attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            add(folder, L"Explorer · " + BetterPanelDestinationLabel(folder),
+                false);
+        }
+    }
+    // Which boxes are locked: the Workspace's saved layout.
+    WCHAR layout[128]{};
+    Wh_GetStringValue(L"betterPanelWorkspaceBoxes", layout, ARRAYSIZE(layout));
+    std::vector<int> fields;
+    for (std::wstring_view rest{layout}; !rest.empty();) {
+        size_t bar = rest.find(L'|');
+        fields.push_back(_wtoi(std::wstring(rest.substr(0, bar)).c_str()));
+        if (bar == std::wstring_view::npos) break;
+        rest.remove_prefix(bar + 1);
+    }
+    // One row for every box the Workspace shows, even when two boxes show the
+    // same folder. A box showing Home has nowhere to drop, so its row is
+    // listed but greyed.
+    int layoutKind = fields.size() >= 2 ? std::clamp(fields[1], 1, 4) : 2;
+    int count = layoutKind == 4 ? 4 : layoutKind == 1 ? 1 : 2;
+    auto destinations = BetterPanelSavedWorkspaceDestinations();
+    for (int box = 0; box < count; ++box) {
+        bool locked = fields.size() >= 13 && fields[0] == 3 && fields[5 + box] != 0;
+        std::wstring label = L"Workspace " + std::to_wstring(box + 1) + L" · ";
+        auto found = std::find_if(destinations.begin(), destinations.end(),
+                                  [box](auto const& item) { return item.box == box; });
+        if (found == destinations.end()) {
+            entries.push_back({std::wstring(), label + L"Home", locked, nullptr});
+            continue;
+        }
+        SHFILEINFOW info{};
+        SHGetFileInfoW(found->folder.c_str(), 0, &info, sizeof(info),
+                       SHGFI_ICON | SHGFI_SMALLICON);
+        entries.push_back({found->folder,
+                           label + BetterPanelDestinationLabel(found->folder), locked,
+                           info.hIcon});
+    }
+    return entries;
+}
+
+// Layout: a header strip, then one row per destination.
+RECT BetterPanelPeekRow(BetterPanelPeek* peek, int index) {
+    RECT client{};
+    GetClientRect(peek->window, &client);
+    int header = BetterPanelPeekScale(peek->window, 34);
+    int row = BetterPanelPeekScale(peek->window, 36);
+    int pad = BetterPanelPeekScale(peek->window, 6);
+    return {pad, header + row * index, client.right - pad,
+            header + row * (index + 1)};
+}
+
+int BetterPanelPeekRowAt(BetterPanelPeek* peek, POINT client) {
+    for (int i = 0; i < static_cast<int>(peek->entries.size()); ++i) {
+        RECT rect = BetterPanelPeekRow(peek, i);
+        if (PtInRect(&rect, client)) return i;
+    }
+    return -1;
+}
+
+void BetterPanelPaintPeek(BetterPanelPeek* peek, HDC dc) {
+    HWND window = peek->window;
+    RECT client{};
+    GetClientRect(window, &client);
+    auto colors = BetterPanelGetWorkspaceColors(BetterPanelWorkspaceDark());
+    auto scale = [&](int value) { return BetterPanelPeekScale(window, value); };
+    HDC memory = CreateCompatibleDC(dc);
+    HBITMAP bitmap = CreateCompatibleBitmap(dc, std::max(1L, client.right),
+                                            std::max(1L, client.bottom));
+    HGDIOBJ oldBitmap = SelectObject(memory, bitmap);
+    BetterPanelWorkspaceFill(memory, client, colors.toolbar);
+    HFONT font = CreateFontW(-scale(12), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                             L"Segoe UI Variable Text");
+    HFONT bold = CreateFontW(-scale(12), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH,
+                             L"Segoe UI Variable Text");
+    HFONT icons = CreateFontW(-scale(12), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              ANTIALIASED_QUALITY, DEFAULT_PITCH, L"Segoe Fluent Icons");
+    SetBkMode(memory, TRANSPARENT);
+    HGDIOBJ oldFont = SelectObject(memory, bold);
+    SetTextColor(memory, colors.text);
+    RECT header{scale(14), 0, client.right - scale(40), scale(34)};
+    PCWSTR title = peek->drop >= 0 || peek->entries.empty() ? L"Quick Peek"
+                                                            : L"Quick Peek";
+    DrawTextW(memory, title, -1, &header,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    // Header button: bring the pop-out back.
+    RECT open{client.right - scale(38), scale(4), client.right - scale(6), scale(30)};
+    if (peek->hover == -2) BetterPanelWorkspaceRound(memory, open, colors.hover, scale(6));
+    SelectObject(memory, icons);
+    wchar_t openGlyph = 0xE8A7;  // open in new window
+    DrawTextW(memory, &openGlyph, 1, &open,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (peek->entries.empty()) {
+        SelectObject(memory, font);
+        SetTextColor(memory, colors.secondary);
+        RECT empty{scale(14), scale(34), client.right - scale(14), client.bottom};
+        DrawTextW(memory, L"No folders yet. Open a folder in Explorer or a Workspace box.",
+                  -1, &empty, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX);
+    }
+    for (int i = 0; i < static_cast<int>(peek->entries.size()); ++i) {
+        auto const& entry = peek->entries[i];
+        RECT rect = BetterPanelPeekRow(peek, i);
+        if (i == peek->drop) {
+            BetterPanelWorkspaceRound(memory, rect, colors.accent, scale(8));
+            RECT inner = rect;
+            InflateRect(&inner, -scale(2), -scale(2));
+            BetterPanelWorkspaceRound(memory, inner, colors.hover, scale(6));
+        } else if (i == peek->hover && !entry.folder.empty()) {
+            BetterPanelWorkspaceRound(memory, rect, colors.hover, scale(8));
+        }
+        int iconSize = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(window));
+        if (entry.icon) {
+            DrawIconEx(memory, rect.left + scale(10),
+                       (rect.top + rect.bottom - iconSize) / 2, entry.icon, iconSize,
+                       iconSize, 0, nullptr, DI_NORMAL);
+        }
+        RECT text{rect.left + scale(16) + iconSize, rect.top,
+                  rect.right - scale(entry.locked ? 30 : 10), rect.bottom};
+        SelectObject(memory, font);
+        SetTextColor(memory, entry.folder.empty() ? colors.secondary : colors.text);
+        DrawTextW(memory, entry.title.c_str(), static_cast<int>(entry.title.size()),
+                  &text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                             DT_NOPREFIX);
+        if (entry.locked) {
+            RECT lock{rect.right - scale(28), rect.top, rect.right - scale(6),
+                      rect.bottom};
+            SelectObject(memory, icons);
+            SetTextColor(memory, colors.secondary);
+            wchar_t glyph = 0xE72E;
+            DrawTextW(memory, &glyph, 1, &lock,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+    }
+    BitBlt(dc, 0, 0, client.right, client.bottom, memory, 0, 0, SRCCOPY);
+    SelectObject(memory, oldFont);
+    SelectObject(memory, oldBitmap);
+    DeleteObject(font);
+    DeleteObject(bold);
+    DeleteObject(icons);
+    DeleteObject(bitmap);
+    DeleteDC(memory);
+}
+
+// Drops on the floating button open Quick Peek; drops on a Quick Peek row go
+// to that folder's own Shell drop target.
+class BetterPanelPeekDropTarget final : public IDropTarget {
+   public:
+    BetterPanelPeekDropTarget(BetterPanelState* state, bool widget)
+        : state_(state), widget_(widget) {
+        CoCreateInstance(kBetterPanelClsidDragDropHelper, nullptr,
+                         CLSCTX_INPROC_SERVER, IID_PPV_ARGS(helper_.put()));
+    }
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** object) override {
+        if (!object) return E_POINTER;
+        if (riid == IID_IUnknown || riid == IID_IDropTarget) {
+            *object = static_cast<IDropTarget*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+    }
+    IFACEMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+    IFACEMETHODIMP_(ULONG) Release() override {
+        ULONG refs = --refs_;
+        if (!refs) delete this;
+        return refs;
+    }
+    IFACEMETHODIMP DragEnter(IDataObject* data, DWORD keys, POINTL point,
+                             DWORD* effect) override {
+        data_.copy_from(data);
+        if (widget_) {
+            BetterPanelShowPeekFor(state_);
+        }
+        if (helper_) {
+            POINT pt{point.x, point.y};
+            helper_->DragEnter(Window(), data, &pt, *effect);
+        }
+        return Over(keys, point, effect);
+    }
+    IFACEMETHODIMP DragOver(DWORD keys, POINTL point, DWORD* effect) override {
+        HRESULT hr = Over(keys, point, effect);
+        if (helper_) {
+            POINT pt{point.x, point.y};
+            helper_->DragOver(&pt, *effect);
+        }
+        return hr;
+    }
+    IFACEMETHODIMP DragLeave() override {
+        if (helper_) helper_->DragLeave();
+        Leave();
+        return S_OK;
+    }
+    IFACEMETHODIMP Drop(IDataObject* data, DWORD keys, POINTL point,
+                        DWORD* effect) override {
+        Over(keys, point, effect);
+        if (helper_) {
+            POINT pt{point.x, point.y};
+            helper_->Drop(data, &pt, *effect);
+        }
+        HRESULT hr = S_OK;
+        bool dropped = false;
+        if (target_) {
+            hr = target_->Drop(data, keys, point, effect);
+            target_ = nullptr;
+            dropped = true;
+        } else {
+            *effect = DROPEFFECT_NONE;
+        }
+        Leave();
+        // Close the list after the drop has returned, not from inside it.
+        if (dropped && state_->peekWindow) {
+            PostMessageW(state_->peekWindow, WM_APP + 1, 0, 0);
+        }
+        return hr;
+    }
+    static void BetterPanelShowPeekFor(BetterPanelState* state);
+
+   private:
+    ~BetterPanelPeekDropTarget() = default;
+    HWND Window() {
+        return widget_ ? state_->widgetWindow : state_->peekWindow;
+    }
+    BetterPanelPeek* Peek() {
+        return state_->peekWindow
+                   ? reinterpret_cast<BetterPanelPeek*>(
+                         GetWindowLongPtrW(state_->peekWindow, GWLP_USERDATA))
+                   : nullptr;
+    }
+    void Leave() {
+        if (target_) target_->DragLeave();
+        target_ = nullptr;
+        row_ = -1;
+        data_ = nullptr;
+        if (auto* peek = Peek(); peek && peek->drop != -1) {
+            peek->drop = -1;
+            InvalidateRect(peek->window, nullptr, FALSE);
+        }
+    }
+    HRESULT Over(DWORD keys, POINTL point, DWORD* effect) {
+        DWORD allowed = *effect;
+        *effect = DROPEFFECT_NONE;
+        auto* peek = Peek();
+        if (widget_ || !peek) return S_OK;
+        POINT client{point.x, point.y};
+        ScreenToClient(peek->window, &client);
+        int row = BetterPanelPeekRowAt(peek, client);
+        peek->awayTicks = 0;
+        if (row != row_) {
+            if (target_) target_->DragLeave();
+            target_ = nullptr;
+            row_ = row;
+            winrt::com_ptr<IShellItem> item;
+            if (row >= 0 && data_ &&
+                SUCCEEDED(SHCreateItemFromParsingName(
+                    peek->entries[row].folder.c_str(), nullptr,
+                    IID_PPV_ARGS(item.put())))) {
+                item->BindToHandler(nullptr, kBetterPanelBhidSFUIObject,
+                                    IID_PPV_ARGS(target_.put()));
+            }
+            if (target_) {
+                DWORD entered = allowed;
+                if (FAILED(target_->DragEnter(data_.get(), keys, point, &entered))) {
+                    target_ = nullptr;
+                }
+            }
+            peek->drop = target_ ? row : -1;
+            InvalidateRect(peek->window, nullptr, FALSE);
+        }
+        if (!target_) return S_OK;
+        *effect = allowed;
+        return target_->DragOver(keys, point, effect);
+    }
+
+    std::atomic<ULONG> refs_{1};
+    BetterPanelState* state_;
+    bool widget_;
+    winrt::com_ptr<IDropTargetHelper> helper_;
+    winrt::com_ptr<IDataObject> data_;
+    winrt::com_ptr<IDropTarget> target_;
+    int row_ = -1;
+};
+
+LRESULT CALLBACK BetterPanelPeekProc(HWND window, UINT message, WPARAM wParam,
+                                     LPARAM lParam) {
+    auto* peek = reinterpret_cast<BetterPanelPeek*>(
+        GetWindowLongPtrW(window, GWLP_USERDATA));
+    POINT point{static_cast<short>(LOWORD(lParam)),
+                static_cast<short>(HIWORD(lParam))};
+    switch (message) {
+        case WM_NCCREATE:
+            SetWindowLongPtrW(
+                window, GWLP_USERDATA,
+                reinterpret_cast<LONG_PTR>(
+                    reinterpret_cast<CREATESTRUCTW*>(lParam)->lpCreateParams));
+            break;
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT paint{};
+            HDC dc = BeginPaint(window, &paint);
+            if (peek) BetterPanelPaintPeek(peek, dc);
+            EndPaint(window, &paint);
+            return 0;
+        }
+        case WM_MOUSEMOVE: {
+            if (!peek) break;
+            RECT client{};
+            GetClientRect(window, &client);
+            RECT open{client.right - BetterPanelPeekScale(window, 38), 0, client.right,
+                      BetterPanelPeekScale(window, 34)};
+            int hover = PtInRect(&open, point) ? -2 : BetterPanelPeekRowAt(peek, point);
+            if (hover != peek->hover) {
+                peek->hover = hover;
+                InvalidateRect(window, nullptr, FALSE);
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            if (!peek) break;
+            BetterPanelState* state = peek->state;
+            if (peek->hover == -2) {
+                BetterPanelRestoreFromWidget(state);  // also closes Quick Peek
+                return 0;
+            }
+            int row = BetterPanelPeekRowAt(peek, point);
+            if (row >= 0 && !peek->entries[row].folder.empty()) {
+                std::wstring folder = peek->entries[row].folder;
+                BetterPanelHidePeek(state);
+                BetterPanelShowInLinkedExplorer(state, nullptr, folder);
+            }
+            return 0;
+        }
+        case WM_APP + 1:
+            if (peek) BetterPanelHidePeek(peek->state);
+            return 0;
+        case WM_TIMER:
+            // Close once the pointer has been away from both the button and
+            // the list for a moment (this also works mid-drag).
+            if (peek && wParam == 1) {
+                POINT cursor{};
+                GetCursorPos(&cursor);
+                RECT mine{}, widget{};
+                GetWindowRect(window, &mine);
+                if (peek->state->widgetWindow) {
+                    GetWindowRect(peek->state->widgetWindow, &widget);
+                }
+                if (PtInRect(&mine, cursor) || PtInRect(&widget, cursor)) {
+                    peek->awayTicks = 0;
+                } else if (++peek->awayTicks >= 3) {
+                    BetterPanelHidePeek(peek->state);
+                }
+            }
+            return 0;
+        case WM_NCDESTROY:
+            SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+            if (peek) {
+                for (auto& entry : peek->entries) {
+                    if (entry.icon) DestroyIcon(entry.icon);
+                }
+                if (peek->state && peek->state->peekWindow == window) {
+                    peek->state->peekWindow = nullptr;
+                }
+                delete peek;
+            }
+            break;
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+
+PCWSTR BetterPanelPeekClassName() {
+    static std::wstring const name = [] {
+        std::wstring value = L"BetterPanelQuickPeek_" +
+                             std::to_wstring(reinterpret_cast<uintptr_t>(
+                                 BetterPanelGetThisModule())) +
+                             L"_" + std::to_wstring(GetTickCount64());
+        WNDCLASSEXW windowClass{sizeof(windowClass)};
+        windowClass.lpfnWndProc = BetterPanelPeekProc;
+        windowClass.hInstance = BetterPanelGetThisModule();
+        windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        windowClass.lpszClassName = value.c_str();
+        RegisterClassExW(&windowClass);
+        return value;
+    }();
+    return name.c_str();
+}
+
+void BetterPanelShowPeek(BetterPanelState* state) {
+    if (!state || !state->widgetWindow || state->peekWindow) return;
+    HWND widget = state->widgetWindow;
+    auto* peek = new BetterPanelPeek();
+    peek->state = state;
+    peek->entries = BetterPanelGatherPeekEntries(state);
+    UINT dpi = GetDpiForWindow(widget);
+    int width = MulDiv(280, dpi, 96);
+    int rows = std::max<int>(1, static_cast<int>(peek->entries.size()));
+    int height = MulDiv(34 + 36 * rows + 8, dpi, 96);
+    // Beside the button, on the side with more room, kept on screen.
+    RECT button{};
+    GetWindowRect(widget, &button);
+    MONITORINFO monitor{sizeof(monitor)};
+    GetMonitorInfoW(MonitorFromWindow(widget, MONITOR_DEFAULTTONEAREST), &monitor);
+    RECT work = monitor.rcWork;
+    int gap = MulDiv(6, dpi, 96);
+    bool left = button.left - work.left > work.right - button.right;
+    int x = left ? button.left - gap - width : button.right + gap;
+    int y = std::clamp(static_cast<int>(button.top), static_cast<int>(work.top),
+                       std::max(static_cast<int>(work.top),
+                                static_cast<int>(work.bottom) - height));
+    HWND window = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+        BetterPanelPeekClassName(), L"Quick Peek", WS_POPUP, x, y, width, height,
+        nullptr, nullptr, BetterPanelGetThisModule(), peek);
+    if (!window) {
+        delete peek;
+        return;
+    }
+    peek->window = window;
+    state->peekWindow = window;
+    DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+    DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE, &corner,
+                          sizeof(corner));
+    BOOL dark = BetterPanelWorkspaceDark();
+    DwmSetWindowAttribute(window, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+    auto* target = new BetterPanelPeekDropTarget(state, false);
+    if (SUCCEEDED(RegisterDragDrop(window, target))) {
+        peek->dropTarget = target;
+    } else {
+        target->Release();
+    }
+    SetTimer(window, 1, 100, nullptr);
+    ShowWindow(window, SW_SHOWNOACTIVATE);
+}
+
+void BetterPanelPeekDropTarget::BetterPanelShowPeekFor(BetterPanelState* state) {
+    BetterPanelShowPeek(state);
+}
+
+void BetterPanelHidePeek(BetterPanelState* state) {
+    if (!state || !state->peekWindow) return;
+    HWND window = state->peekWindow;
+    state->peekWindow = nullptr;
+    if (auto* peek = reinterpret_cast<BetterPanelPeek*>(
+            GetWindowLongPtrW(window, GWLP_USERDATA))) {
+        if (peek->dropTarget) {
+            RevokeDragDrop(window);
+            peek->dropTarget->Release();
+            peek->dropTarget = nullptr;
+        }
+    }
+    DestroyWindow(window);
+}
+
+// Gives the floating button its drop target (dragging files onto it opens
+// Quick Peek), or takes it away before the button goes.
+void BetterPanelSetWidgetDropTarget(BetterPanelState* state, bool enable) {
+    if (!state || !state->widgetWindow) return;
+    if (enable) {
+        auto* target = new BetterPanelPeekDropTarget(state, true);
+        if (FAILED(RegisterDragDrop(state->widgetWindow, target))) {
+            target->Release();
+            return;
+        }
+        // RegisterDragDrop holds its own reference.
+        target->Release();
+    } else {
+        RevokeDragDrop(state->widgetWindow);
+    }
+}
+
 void BetterPanelEnsureShareActions(
     std::shared_ptr<BetterPanelState> const& state) {
     if (state->shareActionRow.get()) {
@@ -12431,18 +17299,49 @@ void BetterPanelEnsureShareActions(
         return;
     }
     auto share = BetterPanelFindShareButton(host.XamlRoot().Content());
-    if (!share) {
-        return;
-    }
-    auto parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
-                      GetParent(share)
-                      .try_as<muxc::Panel>();
-    if (!parent) {
-        return;
-    }
+    muxc::Panel parent{nullptr};
     uint32_t shareIndex = 0;
-    if (!parent.Children().IndexOf(share, shareIndex)) {
-        return;
+    if (!share && (state->workspaceBox || state->standalone)) {
+        // A Workspace box has no Explorer Details pane around it, so there is
+        // no native Share button to take the look from. A stand-in styled
+        // like a standard button gives the actions the same shape; the row
+        // goes into the panel's own actions host below.
+        share = muxc::Button();
+        auto resources = winrt::Microsoft::UI::Xaml::Application::Current().Resources();
+        auto lookup = [&](PCWSTR key) {
+            return resources.TryLookup(winrt::box_value(key));
+        };
+        if (auto style = lookup(L"DefaultButtonStyle").try_as<mux::Style>()) {
+            share.Style(style);
+        }
+        if (auto brush = lookup(L"ButtonBackground").try_as<winrt::Microsoft::UI::Xaml::Media::Brush>()) {
+            share.Background(brush);
+        }
+        if (auto brush = lookup(L"ButtonBorderBrush").try_as<winrt::Microsoft::UI::Xaml::Media::Brush>()) {
+            share.BorderBrush(brush);
+        }
+        if (auto brush = lookup(L"ButtonForeground").try_as<winrt::Microsoft::UI::Xaml::Media::Brush>()) {
+            share.Foreground(brush);
+        }
+        share.BorderThickness(Thickness{1, 1, 1, 1});
+        share.CornerRadius(CornerRadius{4});
+        share.Height(32);
+        share.Width(96);
+        parent = muxc::StackPanel();
+        parent.Children().Append(share);
+    } else {
+        if (!share) {
+            return;
+        }
+        parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::
+                     GetParent(share)
+                     .try_as<muxc::Panel>();
+        if (!parent) {
+            return;
+        }
+        if (!parent.Children().IndexOf(share, shareIndex)) {
+            return;
+        }
     }
 
     auto weakStatus = state->status;
@@ -12834,6 +17733,12 @@ void BetterPanelEnsureShareActions(
         });
     primaryActions.Children().Append(nativeFileActionsButton);
 
+    auto toWorkspaceButton = BetterPanelMakeToWorkspaceButton(state);
+    applyNativeButtonVisual(toWorkspaceButton);
+    toWorkspaceButton.Height(shareHeight);
+    state->toWorkspaceButton = winrt::make_weak(toWorkspaceButton);
+    primaryActions.Children().Append(toWorkspaceButton);
+
     auto extractButton = BetterPanelMakeIconButton(L"Extract", L"\uE8B7");
     extractButton.Height(shareHeight);
     extractButton.Visibility(Visibility::Collapsed);
@@ -13118,6 +18023,7 @@ void BetterPanelFinishStartupLoading(
     state->startupLoadingHost = {};
 }
 
+
 void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     if (!state || state->unloaded) return;
     if (auto host = state->host.get();
@@ -13145,19 +18051,46 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         }
         BetterPanelUpdateTextControls(state);
     }
-    BetterPanelExplorerWindowScope explorerWindowScope(state->explorerWindow);
+    HWND panelScope = BetterPanelPanelScopeWindow(state.get());
+    BetterPanelExplorerWindowScope explorerWindowScope(
+        panelScope ? panelScope : state->explorerWindow);
     BetterPanelFocusedTabCacheScope focusedTabScope;
+    BetterPanelBoxViewScope boxViewScope(state->workspaceBox, state->workspacePaths,
+                                         state->workspaceFolder,
+                                         state->workspaceHome);
     BetterPanelEnsureShareActions(state);
     BetterPanelHideNativeDetails(state);
-    auto activeSelection = BetterPanelGetActiveSelectionPaths();
-    bool isHome = activeSelection.empty() && BetterPanelIsActiveHome();
+    // A Workspace box shows the items it keeps, not Explorer's selection.
+    bool workspaceBox = state->workspaceBox;
+    auto activeSelection = workspaceBox ? state->workspacePaths
+                                        : BetterPanelGetActiveSelectionPaths();
+    bool isHome = workspaceBox
+        ? state->workspaceHome ||
+              (activeSelection.empty() && state->workspaceFolder.empty())
+        : activeSelection.empty() && BetterPanelIsActiveHome();
+    if (!isHome && !state->detached && !workspaceBox &&
+        g_settings.windows12Compat) {
+        // A Windows 12 Explorer Concept page is not a folder to act on: show
+        // the Home dashboard there instead of folder details and actions.
+        bool windows12Page =
+            BetterPanelIsWindows12Carrier(BetterPanelGetActiveFolderPath());
+        if (!windows12Page &&
+            BetterPanelWindows12Present(state->explorerWindow)) {
+            windows12Page = BetterPanelIsControlPanelLocation(
+                BetterPanelGetActiveFolderParsingName());
+        }
+        if (windows12Page) {
+            isHome = true;
+            activeSelection.clear();
+        }
+    }
     Wh_Log(L"Refresh explorer=%p tab=%p selectionCount=%zu first=%s home=%d",
            state->explorerWindow, BetterPanelGetFocusedTabWindow(),
            activeSelection.size(),
            activeSelection.empty() ? L"" : activeSelection.front().c_str(),
            isHome ? 1 : 0);
-    if (!state->detached && !isHome && state->homeWasVisible && activeSelection.empty() &&
-        BetterPanelGetActiveFolderPath().empty() &&
+    if (!state->detached && !workspaceBox && !isHome && state->homeWasVisible &&
+        activeSelection.empty() && BetterPanelGetActiveFolderPath().empty() &&
         BetterPanelGetActiveFolderDisplayName().empty()) {
         // Keep the Home dashboard through brief shell-view refresh gaps.
         isHome = true;
@@ -13171,7 +18104,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
         previousPathAttributes != INVALID_FILE_ATTRIBUTES &&
         !(previousPathAttributes & FILE_ATTRIBUTE_DIRECTORY);
     bool preserveSelectionDuringResize =
-        !state->settledSelectionRefresh && !isHome &&
+        !workspaceBox && !state->settledSelectionRefresh && !isHome &&
         activeSelection.empty() && previousPathIsFile &&
         (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     bool isMultiSelection = activeSelection.size() > 1;
@@ -13180,7 +18113,8 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
                     : (activeSelection.empty()
                            ? (preserveSelectionDuringResize
                                   ? state->selectedPath
-                                  : BetterPanelGetActiveFolderPath())
+                                  : workspaceBox ? state->workspaceFolder
+                                                 : BetterPanelGetActiveFolderPath())
                            : state->selectedPath);
     if (isHome) path.clear();
     if (path.empty() && !isHome) path = state->selectedPath;
@@ -13227,7 +18161,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     bool isText = BetterPanelIsTextFile(path);
     bool isPdf = g_settings.nativeTextPreview && BetterPanelIsPdfFile(path);
     if (isMultiSelection) {
-        path = state->selectedPath;
+        path = workspaceBox ? activeSelection.front() : state->selectedPath;
         isAudio = BetterPanelIsAudioFile(path);
         isVideo = BetterPanelIsVideoFile(path);
         isGif = BetterPanelIsGifFile(path);
@@ -13276,8 +18210,9 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
                                 : Visibility::Visible);
         if (auto shareButton = state->shareButton.get()) {
             BetterPanelSetVisibilityIfChanged(
-                shareButton, isDirectory ? Visibility::Collapsed
-                                         : Visibility::Visible);
+                shareButton, isDirectory || workspaceBox || state->standalone
+                                 ? Visibility::Collapsed  // no Share sheet in a box
+                                 : Visibility::Visible);
         }
         if (auto nativeShare = state->nativeShareButton.get()) {
             BetterPanelSetVisibilityIfChanged(nativeShare,
@@ -13295,6 +18230,13 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             (isMultiSelection || isHome || isDriveRoot || path.empty())
                 ? Visibility::Collapsed
                 : Visibility::Visible);
+    }
+    // Home must leave together with the Home view. Set it here, with the
+    // file actions, not only further down: if anything between fails, a
+    // file would otherwise show its actions above a leftover dashboard.
+    if (auto homeCard = state->homeCard.get()) {
+        BetterPanelSetVisibilityIfChanged(
+            homeCard, isHome ? Visibility::Visible : Visibility::Collapsed);
     }
 
     auto nativeInfoBanner = state->nativeInfoBanner.get();
@@ -13872,6 +18814,7 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
             } else {
                 BetterPanelLoadFileIcon(state, path);
                 BetterPanelLoadOpenActionIcon(state, path);
+                if (workspaceBox || state->standalone) BetterPanelLoadBoxFilePreview(state, path);
             }
             BetterPanelLoadInsights(state, path);
         }
@@ -13921,11 +18864,14 @@ void BetterPanelRefresh(std::shared_ptr<BetterPanelState> const& state) {
     BetterPanelUpdateActionWrapping(state);
     BetterPanelRefreshPlaybackState(state);
 }
-
 std::optional<std::wstring> BetterPanelDetachedSelectionSignature(
     std::shared_ptr<BetterPanelState> const& state) {
     if (!state || !state->detached) return std::nullopt;
-    BetterPanelExplorerWindowScope explorerWindowScope(state->explorerWindow);
+    // A linked pop-out shows the linked window's selection; the Workspace
+    // shows its active view's.
+    HWND scope = BetterPanelPanelScopeWindow(state.get());
+    BetterPanelExplorerWindowScope explorerWindowScope(
+        scope ? scope : state->explorerWindow);
     BetterPanelInvalidateExplorerQueryCaches();
     auto paths = BetterPanelGetActiveSelectionPaths(false);
     std::wstring signature = L"selection:";
@@ -14096,11 +19042,14 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
     controlSpacer.Width(GridLength{1, GridUnitType::Star});
     muxc::ColumnDefinition favoriteColumn;
     favoriteColumn.Width(GridLength{1, GridUnitType::Auto});
+    muxc::ColumnDefinition workspaceColumn;
+    workspaceColumn.Width(GridLength{1, GridUnitType::Auto});
     muxc::ColumnDefinition pinColumn;
     pinColumn.Width(GridLength{1, GridUnitType::Auto});
     panelWindowControls.ColumnDefinitions().Append(homeColumn);
     panelWindowControls.ColumnDefinitions().Append(controlSpacer);
     panelWindowControls.ColumnDefinitions().Append(favoriteColumn);
+    panelWindowControls.ColumnDefinitions().Append(workspaceColumn);
     panelWindowControls.ColumnDefinitions().Append(pinColumn);
 
     auto panelHomeButton = BetterPanelMakeSystemResourceIconButton(
@@ -14109,7 +19058,8 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
         [weakState](winrt::Windows::Foundation::IInspectable const&,
                     RoutedEventArgs const&) {
             if (auto state = weakState.lock()) {
-                g_betterQueryExplorerWindow = state->explorerWindow;
+                g_betterQueryExplorerWindow =
+                    BetterPanelPanelScopeWindow(state.get());
             }
             BetterPanelNavigateFromHome(
                 weakState,
@@ -14130,8 +19080,37 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
             }
         });
     state->detachButton = winrt::make_weak(panelDetachButton);
-    muxc::Grid::SetColumn(panelDetachButton, 3);
+    muxc::Grid::SetColumn(panelDetachButton, 4);
     panelWindowControls.Children().Append(panelDetachButton);
+
+    // Workspace: up to four panels side by side, in the pop-out only.
+    auto workspaceButton = BetterPanelMakeButton(L"");
+    muxc::FontIcon workspaceIcon;
+    workspaceIcon.Glyph(L"");
+    workspaceIcon.FontSize(14);
+    workspaceButton.Content(workspaceIcon);
+    workspaceButton.Width(32);
+    workspaceButton.Height(32);
+    workspaceButton.MinWidth(32);
+    workspaceButton.MinHeight(32);
+    workspaceButton.Padding(Thickness{0, 0, 0, 0});
+    workspaceButton.Margin(Thickness{0, 0, 6, 0});
+    workspaceButton.Visibility(Visibility::Collapsed);
+    muxa::AutomationProperties::SetName(workspaceButton, L"Workspace");
+    muxc::ToolTipService::SetToolTip(
+        workspaceButton,
+        winrt::box_value(L"Workspace: up to four panels side by side"));
+    workspaceButton.Click(
+        [weakState](winrt::Windows::Foundation::IInspectable const&,
+                    RoutedEventArgs const&) {
+            if (auto state = weakState.lock(); state && state->detached) {
+                state->workspaceMode = !state->workspaceMode;
+                BetterPanelApplyWorkspaceMode(state.get());
+            }
+        });
+    state->workspaceButton = winrt::make_weak(workspaceButton);
+    muxc::Grid::SetColumn(workspaceButton, 3);
+    panelWindowControls.Children().Append(workspaceButton);
     state->appearanceHeader = winrt::make_weak(panelWindowControls);
     state->nativeAppearanceHeaderBackground = panelWindowControls.Background();
     BetterPanelUpdateDetachButton(state.get());
@@ -14538,6 +19517,10 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
             if (!queued && state->timer) state->timer.Start();
         });
     multiPrimaryButtons.Children().Append(multiMoveButton);
+
+    auto toWorkspaceMultiButton = BetterPanelMakeToWorkspaceButton(state);
+    state->toWorkspaceMultiButton = winrt::make_weak(toWorkspaceMultiButton);
+    multiPrimaryButtons.Children().Append(toWorkspaceMultiButton);
 
     auto multiRenameButton =
         BetterPanelMakeIconButton(L"Bulk rename", L"\uE8AC");
@@ -16292,7 +21275,7 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
     homeCard.CornerRadius(CornerRadius{8});
     homeCard.Visibility(Visibility::Collapsed);
     homeCard.HorizontalAlignment(HorizontalAlignment::Stretch);
-    state->homeCard = winrt::make_weak(homeCard.as<FrameworkElement>());
+    state->homeCard.Set(homeCard.as<FrameworkElement>(), panel);
 
     muxc::StackPanel homeContent;
     homeContent.Spacing(5);
@@ -16308,7 +21291,7 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
     driveCard.Padding(Thickness{0, 0, 0, 6});
     driveCard.Visibility(Visibility::Collapsed);
     driveCard.HorizontalAlignment(HorizontalAlignment::Stretch);
-    state->driveCard = winrt::make_weak(driveCard.as<FrameworkElement>());
+    state->driveCard.Set(driveCard.as<FrameworkElement>(), panel);
     muxc::StackPanel driveContent;
     driveContent.Spacing(6);
     state->driveContent = winrt::make_weak(driveContent);
@@ -16321,8 +21304,7 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
     insightsCard.CornerRadius(CornerRadius{8});
     insightsCard.Visibility(Visibility::Collapsed);
     insightsCard.HorizontalAlignment(HorizontalAlignment::Stretch);
-    state->insightsCard =
-        winrt::make_weak(insightsCard.as<FrameworkElement>());
+    state->insightsCard.Set(insightsCard.as<FrameworkElement>(), panel);
 
     muxc::StackPanel insightsShell;
     insightsShell.Spacing(6);
@@ -16459,8 +21441,7 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
     metadataCard.CornerRadius(CornerRadius{8});
     metadataCard.Visibility(Visibility::Collapsed);
     metadataCard.HorizontalAlignment(HorizontalAlignment::Stretch);
-    state->metadataCard =
-        winrt::make_weak(metadataCard.as<FrameworkElement>());
+    state->metadataCard.Set(metadataCard.as<FrameworkElement>(), panel);
 
     muxc::StackPanel metadataShell;
     metadataShell.Spacing(6);
@@ -16751,6 +21732,38 @@ void BetterPanelInstallDetailPanel(FrameworkElement element,
                            item->dispatcher.HasThreadAccess();
                 });
         });
+
+    // An Explorer window's panel pops back out if the panel was popped out
+    // when Explorer last closed and no pop-out is open now. Explorer's
+    // process outlives its windows, so this is checked for every window,
+    // not once per mod load. Workspace boxes never trigger it.
+    if (!state->workspaceBox && g_settings.experimentalPopout &&
+        Wh_GetIntValue(L"betterPanelPoppedOut", 0)) {
+        auto dispatcher = state->dispatcher;
+        BetterPanelStartWorker([weakState, dispatcher]() {
+            // Just long enough for the panel's first layout pass.
+            if (BetterPanelWorkerWait(100)) return;
+            dispatcher.TryEnqueue([weakState]() {
+                auto restored = weakState.lock();
+                if (!restored || restored->unloaded || restored->detached ||
+                    restored->workspaceBox ||
+                    !Wh_GetIntValue(L"betterPanelPoppedOut", 0)) {
+                    return;
+                }
+                {
+                    std::lock_guard lock(g_betterPanelMutex);
+                    for (auto const& candidate : g_betterPanels) {
+                        if (candidate && candidate->detached &&
+                            candidate->detachedWindow &&
+                            IsWindow(candidate->detachedWindow)) {
+                            return;  // one pop-out at a time
+                        }
+                    }
+                }
+                BetterPanelOpenDetachedWindow(restored.get());
+            });
+        });
+    }
 
     std::lock_guard lock(g_betterPanelMutex);
     g_betterPanels.push_back(std::move(state));
@@ -17174,6 +22187,12 @@ void BetterPanelHandlePowerMessage(MSG const* message) {
 
 constexpr UINT_PTR kBetterPanelExplorerSubclassId = 0x42504E4C;
 constexpr UINT_PTR kBetterPanelDiscoveryTimerId = 0x42504453;
+// Retries opening the remembered pop-out on a new Explorer window until
+// WinUI is ready on its thread.
+constexpr UINT_PTR kBetterPanelPopoutRestoreTimerId = 0x42505052;
+constexpr wchar_t kBetterPanelPopoutRestoreTriesProp[] = L"BetterPanelPopoutRestoreTries";
+bool BetterPanelPopoutOpen();
+bool BetterPanelOpenStandalonePopout(HWND explorer);
 
 LRESULT CALLBACK BetterPanelExplorerSubclassProc(
     HWND window, UINT message, WPARAM wParam, LPARAM lParam,
@@ -17187,6 +22206,24 @@ LRESULT CALLBACK BetterPanelExplorerSubclassProc(
                   (kBetterPanelShortcutCtrl | kBetterPanelShortcutAlt)) ||
              !(GetKeyState(VK_RMENU) & 0x8000))) {
             BetterPanelToggleDetailsFromShortcut(window);
+        }
+        return 0;
+    }
+    if (message == WM_TIMER && wParam == kBetterPanelPopoutRestoreTimerId) {
+        auto tries = reinterpret_cast<INT_PTR>(
+            GetPropW(window, kBetterPanelPopoutRestoreTriesProp)) + 1;
+        bool done = g_betterPanelDiscoveryUnloading || tries > 150 ||
+                    !g_settings.experimentalPopout ||
+                    !Wh_GetIntValue(L"betterPanelPoppedOut", 0) ||
+                    BetterPanelPopoutOpen() ||
+                    (IsWindowVisible(window) &&
+                     BetterPanelOpenStandalonePopout(window));
+        if (done) {
+            KillTimer(window, kBetterPanelPopoutRestoreTimerId);
+            RemovePropW(window, kBetterPanelPopoutRestoreTriesProp);
+        } else {
+            SetPropW(window, kBetterPanelPopoutRestoreTriesProp,
+                     reinterpret_cast<HANDLE>(tries));
         }
         return 0;
     }
@@ -17229,6 +22266,8 @@ LRESULT CALLBACK BetterPanelExplorerSubclassProc(
         SetTimer(window, kBetterPanelDiscoveryTimerId, 1200, nullptr);
     } else if (message == WM_NCDESTROY) {
         KillTimer(window, kBetterPanelDiscoveryTimerId);
+        KillTimer(window, kBetterPanelPopoutRestoreTimerId);
+        RemovePropW(window, kBetterPanelPopoutRestoreTriesProp);
         BetterPanelRefreshDetailsHotkey(window, false);
         RemoveWindowSubclass(window, BetterPanelExplorerSubclassProc,
                              subclassId);
@@ -17331,6 +22370,30 @@ TargetWindowType GetTargetWindowType(HWND hWnd) {
 
 bool BetterPanelHookExplorerSymbolsIfLoaded(bool applyHooks);
 
+bool BetterPanelPopoutOpen() {
+    std::lock_guard lock(g_betterPanelMutex);
+    for (auto const& candidate : g_betterPanels) {
+        if (candidate && candidate->detached && candidate->detachedWindow &&
+            IsWindow(candidate->detachedWindow)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A new Explorer window, opened after the panel was left popped out, opens
+// the pop-out straight from that saved state; Explorer's Details pane isn't
+// involved. The attempt waits only until the window is shown and WinUI is
+// ready on its thread (checked every 100 ms).
+void BetterPanelRestorePopoutForNewWindow(HWND explorerWindow) {
+    if (!g_settings.experimentalPopout ||
+        !Wh_GetIntValue(L"betterPanelPoppedOut", 0) || BetterPanelPopoutOpen()) {
+        return;
+    }
+    RemovePropW(explorerWindow, kBetterPanelPopoutRestoreTriesProp);
+    SetTimer(explorerWindow, kBetterPanelPopoutRestoreTimerId, 100, nullptr);
+}
+
 void OnWindowCreated(HWND hWnd, PCSTR funcName) {
     TargetWindowType windowType = GetTargetWindowType(hWnd);
     if (windowType != TargetWindowType::None) {
@@ -17343,6 +22406,10 @@ void OnWindowCreated(HWND hWnd, PCSTR funcName) {
         }
         InitializeForCurrentThread(hWnd);
         BetterPanelScheduleCurrentThreadDiscovery();
+        if (windowType == TargetWindowType::FileExplorer &&
+            !g_betterPanelDiscoveryUnloading) {
+            BetterPanelRestorePopoutForNewWindow(hWnd);
+        }
     }
 }
 
@@ -17997,6 +23064,31 @@ void LoadSettings() {
     else if (wcscmp(shape, L"soft") == 0) g_settings.buttonShape = BetterPanelButtonShape::Soft;
     else if (wcscmp(shape, L"round") == 0) g_settings.buttonShape = BetterPanelButtonShape::Round;
     else if (wcscmp(shape, L"pill") == 0) g_settings.buttonShape = BetterPanelButtonShape::Pill;
+
+    g_settings.windows12Compat =
+        Wh_GetIntSetting(L"compatibility.windows12Explorer") != 0;
+
+    g_settings.windowMatchHeight = Wh_GetIntSetting(L"window.matchHeight") != 0;
+    g_settings.windowMakeRoom = Wh_GetIntSetting(L"window.makeRoom") != 0;
+    g_settings.windowAlwaysOnTop = Wh_GetIntSetting(L"window.alwaysOnTop") != 0;
+    g_settings.windowMinimizeWithExplorer =
+        Wh_GetIntSetting(L"window.minimizeWithExplorer") != 0;
+    g_settings.windowDetachOnDrag =
+        Wh_GetIntSetting(L"window.detachOnDrag") != 0;
+    g_settings.windowSnapDistance =
+        std::clamp(Wh_GetIntSetting(L"window.snapDistance"), 0, 200);
+    g_settings.windowSnapGap =
+        std::clamp(Wh_GetIntSetting(L"window.snapGap"), 0, 100);
+    g_settings.windowStartInWorkspace =
+        Wh_GetIntSetting(L"window.startInWorkspace") != 0;
+
+    auto material = WindhawkUtils::StringSetting::make(L"appearance.material");
+    g_settings.material = BetterPanelMaterial::Theme;
+    if (wcscmp(material, L"transparent") == 0) {
+        g_settings.material = BetterPanelMaterial::Transparent;
+    } else if (wcscmp(material, L"tinted") == 0) {
+        g_settings.material = BetterPanelMaterial::Tinted;
+    }
 
     auto buttonLayoutMode =
         WindhawkUtils::StringSetting::make(L"buttonLayout.mode");

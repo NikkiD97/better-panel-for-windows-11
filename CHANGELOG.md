@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.3.0
+
+### Added
+
+- Pop-out docking: attach to either side of Explorer, dock to any screen edge
+  or corner, or float. Drag it onto an edge to dock it.
+- Attached pop-outs follow Explorer, and Explorer shrinks to make room.
+- Docked pop-outs stay put; a broken-link button undocks them.
+- Dragging a pop-out attached to Explorer moves both together.
+- Link the pop-out to any open Explorer window.
+- Always on top.
+- Workspace: up to four panels side by side, stacked or in a grid, with
+  draggable dividers.
+- Follow and Lock per Workspace box; click a box to make it follow.
+- Double-click a box to jump Explorer back to its folder and items.
+- Drop files on a box to copy or move them into its folder.
+- Drag a box's header to carry its items out.
+- To Workspace button: copy or move files into any box's folder.
+- Floating button: minimizing the pop-out shrinks it to a small always-on-top
+  button.
+- Quick Peek: hover or drag files onto the floating button to drop them into
+  Explorer's folder or any Workspace box.
+- The pop-out and Workspace reopen as they were when Explorer starts.
+- Panel material: Theme background, See-through or Tinted glass.
+- Windows 12 Explorer Concept compatibility.
+- New pop-out settings: make room, match height, minimize with Explorer, drag
+  to detach, snap distance, edge spacing and open in Workspace.
+
+### Changed
+
+- The pop-out has its own title bar with Minimize and Pin buttons.
+- The pop-out remembers its size and position.
+- The macOS appearance now follows macOS Tahoe.
+- Files over 1 GB skip SHA-256, so Details appears right away.
+
+### Fixed
+
+- Home could stay visible under a file's actions.
+- Markdown, HTML and SVG previews jumped back to the top while scrolling.
 ## 2.2.4
 
 ### Performance
@@ -382,7 +421,7 @@ the problem remains, or wait until Windhawk refreshes its cache.
 
 - Added an inline PDF viewer powered by Windows' PDF rendering API.
 - Added previous/next page controls, current and total page counts, scrolling,
-  and 50–250% zoom.
+  and 50â€“250% zoom.
 - Re-rendered PDF pages at each zoom level so enlarged text remains sharp.
 - Added a compact Print button beside Share, Open, Open with, and Copy.
 - Made Print appear dynamically for PDFs, text, images, and any other file type
